@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { withTeacherAuthorization } from '../lib/auth';
 import { getErrorName } from '../lib/errors';
 import { jsonResponse } from '../lib/http';
 import type { HttpHandler } from '../lib/http';
@@ -9,10 +10,10 @@ import type { Student } from '../students/types';
 import { parseCreateStudentInput } from '../students/validation';
 
 /**
- * Factory with dependency injection: tests pass a fake repository, while the
- * deployed Lambda uses the default DynamoDB repository below.
+ * Business logic factory kept free of authorization so the production handler
+ * can authorize before lazy repository initialization.
  */
-export const buildCreateStudentHandler = (
+const buildRepositoryHandler = (
   repository: StudentsRepository,
 ): HttpHandler => {
   return async (event) => {
@@ -45,6 +46,15 @@ export const buildCreateStudentHandler = (
   };
 };
 
+/**
+ * Factory with dependency injection: tests pass a fake repository, while the
+ * deployed Lambda uses the default DynamoDB repository below. Authorization
+ * runs before body validation and before any repository operation.
+ */
+export const buildCreateStudentHandler = (
+  repository: StudentsRepository,
+): HttpHandler => withTeacherAuthorization(buildRepositoryHandler(repository));
+
 const repositoryInitializationErrorHandler: HttpHandler = async () =>
   jsonResponse(500, { error: 'Internal server error' });
 
@@ -61,7 +71,7 @@ const getDefaultHandler = (): HttpHandler => {
   }
 
   try {
-    defaultHandler = buildCreateStudentHandler(
+    defaultHandler = buildRepositoryHandler(
       createDynamoDbStudentsRepository(),
     );
 
@@ -76,4 +86,6 @@ const getDefaultHandler = (): HttpHandler => {
   }
 };
 
-export const handler: HttpHandler = (event) => getDefaultHandler()(event);
+export const handler: HttpHandler = withTeacherAuthorization((event) =>
+  getDefaultHandler()(event),
+);

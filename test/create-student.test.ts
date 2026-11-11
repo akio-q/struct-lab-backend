@@ -3,7 +3,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildCreateStudentHandler } from '../src/handlers/create-student';
 import type { StudentsRepository } from '../src/students/repository';
 import type { Student } from '../src/students/types';
-import { createApiEvent } from './helpers/events';
+import {
+  createApiEvent,
+  createAuthenticatedApiEvent,
+} from './helpers/events';
+
+const VALID_BODY = JSON.stringify({
+  fullName: 'Іван Петренко',
+  group: 'ІП-21',
+});
 
 const buildRepository = (): {
   repository: StudentsRepository;
@@ -28,7 +36,7 @@ describe('POST /students handler', () => {
     const handler = buildCreateStudentHandler(repository);
 
     const response = await handler(
-      createApiEvent({
+      createAuthenticatedApiEvent({
         body: JSON.stringify({
           fullName: '  Іван Петренко  ',
           group: '  ІП-21  ',
@@ -63,7 +71,7 @@ describe('POST /students handler', () => {
     ).toString('base64');
 
     const response = await handler(
-      createApiEvent({ body, isBase64Encoded: true }),
+      createAuthenticatedApiEvent({ body, isBase64Encoded: true }),
     );
 
     expect(response.statusCode).toBe(201);
@@ -83,7 +91,7 @@ describe('POST /students handler', () => {
     const { repository, createStudent } = buildRepository();
     const handler = buildCreateStudentHandler(repository);
 
-    const response = await handler(createApiEvent({ body }));
+    const response = await handler(createAuthenticatedApiEvent({ body }));
 
     expect(response.statusCode).toBe(400);
     expect(JSON.parse(response.body ?? 'null')).toHaveProperty('error');
@@ -99,12 +107,7 @@ describe('POST /students handler', () => {
     const handler = buildCreateStudentHandler(repository);
 
     const response = await handler(
-      createApiEvent({
-        body: JSON.stringify({
-          fullName: 'Іван Петренко',
-          group: 'ІП-21',
-        }),
-      }),
+      createAuthenticatedApiEvent({ body: VALID_BODY }),
     );
 
     expect(response.statusCode).toBe(500);
@@ -119,5 +122,108 @@ describe('POST /students handler', () => {
       .join(' ');
     expect(loggedText).not.toContain('Іван Петренко');
     expect(loggedText).not.toContain('ІП-21');
+  });
+
+  describe('authorization', () => {
+    it('returns 401 and does not call the repository without an authorizer context', async () => {
+      const { repository, createStudent } = buildRepository();
+      const handler = buildCreateStudentHandler(repository);
+
+      const response = await handler(createApiEvent({ body: VALID_BODY }));
+
+      expect(response.statusCode).toBe(401);
+      expect(JSON.parse(response.body ?? 'null')).toEqual({
+        error: 'Unauthorized',
+      });
+      expect(createStudent).not.toHaveBeenCalled();
+    });
+
+    it('returns 401 and does not call the repository for an ID token', async () => {
+      const { repository, createStudent } = buildRepository();
+      const handler = buildCreateStudentHandler(repository);
+
+      const response = await handler(
+        createAuthenticatedApiEvent(
+          { body: VALID_BODY },
+          { token_use: 'id', 'cognito:groups': ['teachers'] },
+        ),
+      );
+
+      expect(response.statusCode).toBe(401);
+      expect(JSON.parse(response.body ?? 'null')).toEqual({
+        error: 'Unauthorized',
+      });
+      expect(createStudent).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 and does not call the repository without the teachers group', async () => {
+      const { repository, createStudent } = buildRepository();
+      const handler = buildCreateStudentHandler(repository);
+
+      const response = await handler(
+        createAuthenticatedApiEvent(
+          { body: VALID_BODY },
+          { token_use: 'access', 'cognito:groups': ['students'] },
+        ),
+      );
+
+      expect(response.statusCode).toBe(403);
+      expect(JSON.parse(response.body ?? 'null')).toEqual({
+        error: 'Forbidden',
+      });
+      expect(createStudent).not.toHaveBeenCalled();
+    });
+
+    it('returns 401 before body validation when unauthenticated', async () => {
+      const { repository, createStudent } = buildRepository();
+      const handler = buildCreateStudentHandler(repository);
+
+      const response = await handler(
+        createApiEvent({ body: '{"fullName":' }),
+      );
+
+      expect(response.statusCode).toBe(401);
+      expect(createStudent).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 before body validation without the teachers group', async () => {
+      const { repository, createStudent } = buildRepository();
+      const handler = buildCreateStudentHandler(repository);
+
+      const response = await handler(
+        createAuthenticatedApiEvent(
+          { body: '{"fullName":' },
+          { token_use: 'access', 'cognito:groups': [] },
+        ),
+      );
+
+      expect(response.statusCode).toBe(403);
+      expect(createStudent).not.toHaveBeenCalled();
+    });
+
+    it('does not log tokens, claims, or PII when denying access', async () => {
+      const { repository, createStudent } = buildRepository();
+      const consoleSpy = vi
+        .spyOn(console, 'error')
+        .mockImplementation(() => undefined);
+      const handler = buildCreateStudentHandler(repository);
+
+      const response = await handler(
+        createAuthenticatedApiEvent(
+          { body: VALID_BODY },
+          {
+            token_use: 'id',
+            'cognito:groups': ['teachers'],
+            email: 'teacher@example.com',
+            token: 'secret-token-value',
+            fullName: 'Іван Петренко',
+          },
+        ),
+      );
+
+      expect(response.statusCode).toBe(401);
+      expect(createStudent).not.toHaveBeenCalled();
+      expect(consoleSpy).not.toHaveBeenCalled();
+    });
   });
 });

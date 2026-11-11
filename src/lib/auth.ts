@@ -1,4 +1,6 @@
 import { TEACHERS_GROUP_NAME } from '../constants';
+import { jsonResponse } from './http';
+import type { HttpHandler } from './http';
 
 /**
  * Why teacher authorization was denied.
@@ -145,4 +147,28 @@ export const authorizeTeacherAccess = (
   }
 
   return { authorized: true };
+};
+
+/**
+ * Wraps a handler so teacher authorization runs before it is invoked.
+ *
+ * Denials return a generic JSON error without token claims or internal
+ * details: 401 for missing/invalid authentication context or a non-access
+ * token, and 403 for a valid access token without the exact teachers group.
+ * Authorization outcomes are never logged.
+ */
+export const withTeacherAuthorization = (
+  handler: HttpHandler,
+): HttpHandler => {
+  return async (event) => {
+    const authorization = authorizeTeacherAccess(event);
+    if (!authorization.authorized) {
+      return jsonResponse(authorization.statusCode, {
+        error:
+          authorization.statusCode === 401 ? 'Unauthorized' : 'Forbidden',
+      });
+    }
+
+    return handler(event);
+  };
 };

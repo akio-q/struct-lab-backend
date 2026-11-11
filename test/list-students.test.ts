@@ -7,7 +7,10 @@ import type {
   StudentsRepository,
 } from '../src/students/repository';
 import type { Student } from '../src/students/types';
-import { createApiEvent } from './helpers/events';
+import {
+  createApiEvent,
+  createAuthenticatedApiEvent,
+} from './helpers/events';
 
 const CURRENT_STUDENT_ID = '3f1d2c9b-7a44-4e1c-9f2a-0d2c8e5b1a77';
 const NEXT_STUDENT_ID = '8a7b6c5d-4e3f-4a2b-9c1d-0e9f8a7b6c5d';
@@ -44,7 +47,7 @@ describe('GET /admin/students handler', () => {
     listStudents.mockResolvedValueOnce({ items: [student] });
     const handler = buildListStudentsHandler(repository);
 
-    const response = await handler(createApiEvent());
+    const response = await handler(createAuthenticatedApiEvent());
 
     expect(response.statusCode).toBe(200);
     expect(listStudents).toHaveBeenCalledWith({ limit: 20 });
@@ -59,7 +62,7 @@ describe('GET /admin/students handler', () => {
     const handler = buildListStudentsHandler(repository);
 
     const response = await handler(
-      createApiEvent({ queryStringParameters: { limit: '100' } }),
+      createAuthenticatedApiEvent({ queryStringParameters: { limit: '100' } }),
     );
 
     expect(response.statusCode).toBe(200);
@@ -76,7 +79,7 @@ describe('GET /admin/students handler', () => {
     const cursor = encodeCursor({ studentId: CURRENT_STUDENT_ID });
 
     const response = await handler(
-      createApiEvent({
+      createAuthenticatedApiEvent({
         queryStringParameters: { limit: '50', cursor },
       }),
     );
@@ -99,7 +102,9 @@ describe('GET /admin/students handler', () => {
       const handler = buildListStudentsHandler(repository);
 
       const response = await handler(
-        createApiEvent({ queryStringParameters: { limit } }),
+        createAuthenticatedApiEvent({
+          queryStringParameters: { limit },
+        }),
       );
 
       expect(response.statusCode).toBe(400);
@@ -147,7 +152,7 @@ describe('GET /admin/students handler', () => {
     const handler = buildListStudentsHandler(repository);
 
     const response = await handler(
-      createApiEvent({ queryStringParameters: { cursor } }),
+      createAuthenticatedApiEvent({ queryStringParameters: { cursor } }),
     );
 
     expect(response.statusCode).toBe(400);
@@ -163,7 +168,7 @@ describe('GET /admin/students handler', () => {
       .mockImplementation(() => undefined);
     const handler = buildListStudentsHandler(repository);
 
-    const response = await handler(createApiEvent());
+    const response = await handler(createAuthenticatedApiEvent());
 
     expect(response.statusCode).toBe(500);
     expect(JSON.parse(response.body ?? 'null')).toEqual({
@@ -177,5 +182,108 @@ describe('GET /admin/students handler', () => {
       .join(' ');
     expect(loggedText).not.toContain('Іван Петренко');
     expect(loggedText).not.toContain('ІП-21');
+  });
+
+  describe('authorization', () => {
+    it('returns 401 and does not call the repository without an authorizer context', async () => {
+      const { repository, listStudents } = buildRepository();
+      const handler = buildListStudentsHandler(repository);
+
+      const response = await handler(createApiEvent());
+
+      expect(response.statusCode).toBe(401);
+      expect(JSON.parse(response.body ?? 'null')).toEqual({
+        error: 'Unauthorized',
+      });
+      expect(listStudents).not.toHaveBeenCalled();
+    });
+
+    it('returns 401 and does not call the repository for an ID token', async () => {
+      const { repository, listStudents } = buildRepository();
+      const handler = buildListStudentsHandler(repository);
+
+      const response = await handler(
+        createAuthenticatedApiEvent(
+          {},
+          { token_use: 'id', 'cognito:groups': ['teachers'] },
+        ),
+      );
+
+      expect(response.statusCode).toBe(401);
+      expect(JSON.parse(response.body ?? 'null')).toEqual({
+        error: 'Unauthorized',
+      });
+      expect(listStudents).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 and does not call the repository without the teachers group', async () => {
+      const { repository, listStudents } = buildRepository();
+      const handler = buildListStudentsHandler(repository);
+
+      const response = await handler(
+        createAuthenticatedApiEvent(
+          {},
+          { token_use: 'access', 'cognito:groups': ['students'] },
+        ),
+      );
+
+      expect(response.statusCode).toBe(403);
+      expect(JSON.parse(response.body ?? 'null')).toEqual({
+        error: 'Forbidden',
+      });
+      expect(listStudents).not.toHaveBeenCalled();
+    });
+
+    it('returns 401 before query validation when unauthenticated', async () => {
+      const { repository, listStudents } = buildRepository();
+      const handler = buildListStudentsHandler(repository);
+
+      const response = await handler(
+        createApiEvent({ queryStringParameters: { limit: 'abc' } }),
+      );
+
+      expect(response.statusCode).toBe(401);
+      expect(listStudents).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 before cursor validation without the teachers group', async () => {
+      const { repository, listStudents } = buildRepository();
+      const handler = buildListStudentsHandler(repository);
+
+      const response = await handler(
+        createAuthenticatedApiEvent(
+          { queryStringParameters: { cursor: 'not-a-valid-cursor!' } },
+          { token_use: 'access', 'cognito:groups': [] },
+        ),
+      );
+
+      expect(response.statusCode).toBe(403);
+      expect(listStudents).not.toHaveBeenCalled();
+    });
+
+    it('does not log tokens, claims, or PII when denying access', async () => {
+      const { repository, listStudents } = buildRepository();
+      const consoleSpy = vi
+        .spyOn(console, 'error')
+        .mockImplementation(() => undefined);
+      const handler = buildListStudentsHandler(repository);
+
+      const response = await handler(
+        createAuthenticatedApiEvent(
+          {},
+          {
+            token_use: 'id',
+            'cognito:groups': ['teachers'],
+            email: 'teacher@example.com',
+            token: 'secret-token-value',
+            fullName: 'Іван Петренко',
+          },
+        ),
+      );
+
+      expect(response.statusCode).toBe(401);
+      expect(listStudents).not.toHaveBeenCalled();
+      expect(consoleSpy).not.toHaveBeenCalled();
+    });
   });
 });
