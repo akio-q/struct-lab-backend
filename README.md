@@ -2,106 +2,302 @@
 
 Бекенд навчального вебзастосунку **StructLab** — тренажера структур даних.
 
-Це **Фаза 1**: базова інфраструктура на AWS CDK, одна Lambda-функція та публічний
-endpoint `GET /health`. База даних, авторизація та робота зі студентами з'являться
-в наступних фазах.
+Поточна фаза — **Фаза 2**: студенти зберігаються в DynamoDB, працює публічний
+`POST /students`, а обробник `GET /admin/students` із cursor-based пагінацією вже
+реалізований і протестований, але **навмисно не підключений до API Gateway** до
+появи Cognito.
 
-## Що вже зроблено
+> **Важливо:** `POST /students` у Фазі 2 тимчасово публічний. Перед публічним
+> production-деплоєм його потрібно захистити авторизацією та налаштувати rate
+> limiting.
 
-- TypeScript-проєкт у strict mode.
-- AWS CDK v2 stack, який описує:
-  - API Gateway HTTP API;
-  - Lambda-функцію на Node.js 22;
-  - маршрут `GET /health`.
-- Обробник `GET /health`, який повертає:
+## Що реалізовано
 
-  ```json
-  {
-    "status": "ok",
-    "service": "struct-lab-backend"
-  }
-  ```
-
-- Unit-тест для Lambda-обробника.
-- Тест CDK stack, який перевіряє Lambda, HTTP API, маршрут і output.
+- AWS CDK stack з:
+  - DynamoDB-таблицею студентів;
+  - Lambda для `GET /health`;
+  - Lambda для `POST /students`;
+  - Lambda для `GET /admin/students` (без публічного маршруту);
+  - API Gateway HTTP API з маршрутами `GET /health` і `POST /students`.
+- Зберігання студента: `studentId`, `fullName`, `group`, `createdAt`.
+- Серверна валідація вхідних даних.
+- Генерація UUID для кожного студента.
+- Cursor-based пагінація через DynamoDB `Scan`.
+- Least-privilege IAM:
+  - створення — лише `dynamodb:PutItem`;
+  - перегляд — лише `dynamodb:Scan`.
+- Тести без AWS: валідація, cursor, створення, пагінація, помилки, CDK.
 - Скрипти `lint`, `typecheck`, `test`, `build`, `synth`.
-- Локальна перевірка без AWS-акаунта, ключів і деплою.
 
-## Архітектура Фази 1
+## Чого ще немає
+
+- Cognito та авторизації викладача.
+- Публічного маршруту `GET /admin/students`.
+- Rate limiting.
+- CORS для фронтенду.
+- Деплою в AWS.
+- Пагінації по 5000 записів — вимога ще не підтверджена, тому не реалізована.
+
+## Архітектура
 
 ```text
-Клієнт (браузер, curl, моніторинг)
-              │
-              │ GET /health
-              ▼
-API Gateway HTTP API
-              │ AWS_PROXY (integration)
-              ▼
-AWS Lambda (Node.js 22)
-              │
-              ▼
-HTTP 200 + JSON
+POST /students (тимчасово публічний)
+Клієнт ──► API Gateway HTTP API ──► CreateStudent Lambda ──► DynamoDB PutItem
+                                                              Students table
+
+GET /health (публічний)
+Клієнт ──► API Gateway HTTP API ──► Health Lambda ──► JSON
+
+GET /admin/students (НЕ підключений до API Gateway)
+Фаза 3: Cognito JWT ──► ListStudents Lambda ──► DynamoDB Scan ──► items + nextCursor
 ```
 
 Пояснення:
 
-- **API Gateway HTTP API** приймає HTTP-запит і має публічний URL.
-- **Lambda** виконує код обробника. У цій фазі — лише перевірку стану.
-- **DynamoDB** ще немає. Вона з'явиться у Фазі 2.
-- **Cognito** ще немає. Авторизація викладача з'явиться у Фазі 3.
-- **Rate limiting** ще не налаштований. Його додамо разом із захистом API.
+- **API Gateway HTTP API** приймає HTTP-запити й має публічний URL.
+- **Lambda** виконує бізнес-логіку; кожен обробник має окрему роль.
+- **DynamoDB** зберігає записи студентів.
+- **Cognito** з'явиться у Фазі 3 і захистить адміністративні операції.
+- **Rate limiting** буде доданий разом із захистом API.
 
 ## Структура проєкту
 
 ```text
 struct-lab-backend/
 ├── bin/
-│   └── app.ts                    # Точка входу CDK-застосунку
+│   └── app.ts                         # Точка входу CDK-застосунку
 ├── lib/
-│   └── struct-lab-stack.ts       # Опис інфраструктури: Lambda + HTTP API
+│   └── struct-lab-stack.ts            # DynamoDB, Lambda, IAM, HTTP API
 ├── src/
-│   ├── constants.ts              # Спільні константи (назва сервісу)
-│   └── handlers/
-│       └── health.ts             # Код Lambda для GET /health
+│   ├── constants.ts                   # Назва сервісу
+│   ├── handlers/
+│   │   ├── health.ts                  # GET /health
+│   │   ├── create-student.ts          # POST /students
+│   │   └── list-students.ts           # GET /admin/students (без маршруту)
+│   ├── lib/
+│   │   ├── errors.ts                  # Безпечне ім'я помилки для логів
+│   │   └── http.ts                    # JSON-відповіді та тип handler
+│   └── students/
+│       ├── cursor.ts                  # Кодування/перевірка cursor
+│       ├── repository.ts              # DynamoDB PutItem/Scan
+│       ├── types.ts                   # Student, CreateStudentInput, StudentCursor
+│       └── validation.ts              # Валідація body та query-параметрів
 ├── test/
-│   ├── health.test.ts            # Тест обробника
-│   └── struct-lab-stack.test.ts  # Тест CDK stack
+│   ├── helpers/
+│   │   └── events.ts                  # Тестовий API Gateway event
+│   ├── health.test.ts                 # GET /health
+│   ├── validation.test.ts             # Валідація body та limit
+│   ├── cursor.test.ts                 # Формат і перевірка cursor
+│   ├── create-student.test.ts         # Створення, помилки, відсутність PII у логах
+│   ├── list-students.test.ts          # Пагінація, некоректні запити, помилки DB
+│   ├── students-repository.test.ts    # PutCommand/ScanCommand, cursor, помилки DB
+│   ├── handler-initialization.test.ts # Відсутня STUDENTS_TABLE_NAME
+│   ├── handler-initialization-error.test.ts # Помилка створення repository
+│   └── struct-lab-stack.test.ts       # DynamoDB, IAM, Lambda, routes
 ├── docs/
-│   └── phase-2-plan.md           # План наступної фази
-├── cdk.json                      # Налаштування CDK CLI
-├── eslint.config.mjs             # Правила лінтера
-├── package.json                  # Залежності та скрипти
-├── pnpm-lock.yaml                # Зафіксовані версії залежностей
-├── pnpm-workspace.yaml           # Налаштування pnpm (дозвіл build-скрипта esbuild)
-├── tsconfig.json                 # TypeScript для розробки та перевірки типів
-├── tsconfig.build.json           # TypeScript для збірки в dist/
-├── vitest.config.mts             # Налаштування тестів
-├── .gitignore                    # Що не комітити в Git
-└── README.md                     # Цей файл
+│   └── phase-2-plan.md                # Реалізована архітектура та межі Фази 2
+├── cdk.json                           # Налаштування CDK CLI
+├── eslint.config.mjs                  # Правила лінтера
+├── package.json                       # Залежності та скрипти
+├── pnpm-lock.yaml                     # Зафіксовані версії залежностей
+├── pnpm-workspace.yaml                # Дозвіл build-скрипта esbuild
+├── tsconfig.json                      # TypeScript для розробки й тестів
+├── tsconfig.build.json                # TypeScript для збірки в dist/
+├── vitest.config.mts                  # Налаштування тестів
+├── .gitignore
+└── README.md
 ```
 
 ### Призначення основних файлів
 
 | Файл | Для чого потрібен |
 | --- | --- |
-| `bin/app.ts` | Створює CDK-застосунок і додає до нього `StructLabStack`. CDK CLI запускає цей файл командою з `cdk.json`. |
-| `lib/struct-lab-stack.ts` | Описує хмарні ресурси: Lambda-функцію, HTTP API, маршрут і output з URL API. Це "креслення" інфраструктури. |
-| `src/handlers/health.ts` | Безпосередньо код, який виконується в Lambda. Повертає JSON зі статусом. |
-| `src/constants.ts` | Єдина назва сервісу, щоб не дублювати рядок у коді та тестах. |
-| `test/health.test.ts` | Викликає обробник напряму й перевіряє статус-код і JSON. AWS не потрібен. |
-| `test/struct-lab-stack.test.ts` | Синтезує stack у пам'яті та перевіряє, що Lambda й маршрут `GET /health` справді створюються. |
-| `cdk.json` | Каже CDK CLI, який файл запускати для синтезу (`bin/app.ts`) і куди складати результат (`cdk.out/`). |
-| `tsconfig.json` | Суворі правила TypeScript для всього проєкту, включно з тестами. |
-| `tsconfig.build.json` | Окрема конфігурація для компіляції в `dist/` без тестів. |
-| `vitest.config.mts` | Вказує Vitest, що тести лежать у `test/**/*.test.ts`. |
-| `eslint.config.mjs` | Перевіряє TypeScript-код на типові помилки та неузгоджений стиль. |
-| `package.json` | Скрипти, залежності, версія Node.js і pnpm. |
-| `.gitignore` | Не дозволяє комітити `node_modules/`, `dist/`, `cdk.out/`, логи та `.env`. |
+| `bin/app.ts` | Створює CDK-застосунок і додає `StructLabStack`. |
+| `lib/struct-lab-stack.ts` | Описує DynamoDB-таблицю, три Lambda, IAM-політики, HTTP API та outputs. |
+| `src/handlers/health.ts` | Повертає стан сервісу для `GET /health`. |
+| `src/handlers/create-student.ts` | Валідовує JSON, генерує UUID і зберігає студента через repository. |
+| `src/handlers/list-students.ts` | Читає `limit`/`cursor`, викликає repository і формує `items`/`nextCursor`. |
+| `src/students/validation.ts` | Перевіряє ПІБ, групу, `limit` і наявність cursor. |
+| `src/students/cursor.ts` | Кодує DynamoDB key у base64url, обмежує довжину й перевіряє структуру. |
+| `src/students/repository.ts` | Інтерфейс repository та DynamoDB-реалізація з `PutCommand`/`ScanCommand`. |
+| `src/students/types.ts` | Спільні TypeScript-типи для студентів і cursor. |
+| `src/lib/http.ts` | Єдина JSON-відповідь і тип HTTP handler. |
+| `src/lib/errors.ts` | Для логів береться лише назва класу помилки, без даних студента. |
+| `test/helpers/events.ts` | Мінімальний API Gateway event для unit-тестів. |
+| `test/students-repository.test.ts` | Перевіряє `PutCommand`, `ScanCommand`, перетворення `LastEvaluatedKey` і помилки DynamoDB. |
+| `test/handler-initialization.test.ts` | Перевіряє generic `500`, якщо не задано `STUDENTS_TABLE_NAME`. |
+| `test/handler-initialization-error.test.ts` | Перевіряє generic `500`, якщо створення repository падає. |
+| `test/struct-lab-stack.test.ts` | Перевіряє таблицю, IAM, Lambda, відсутність admin-маршруту та output. |
+| `cdk.json` | Каже CDK CLI запускати `bin/app.ts` і складати результат у `cdk.out/`. |
+| `tsconfig.json` | Strict TypeScript для всього проєкту. |
+| `tsconfig.build.json` | Компіляція `bin/`, `lib/`, `src/` у `dist/` без тестів. |
+| `vitest.config.mts` | Тести лежать у `test/**/*.test.ts`. |
+| `pnpm-workspace.yaml` | Дозволяє esbuild виконати build-скрипт. |
+
+## DynamoDB
+
+Логічна назва конструкції — `StudentsTable`. Фізичну назву таблиці генерує CDK,
+щоб уникнути конфліктів між stack-ами та середовищами.
+
+| Параметр | Значення |
+| --- | --- |
+| Partition key | `studentId` (String) |
+| Billing mode | `PAY_PER_REQUEST` (on-demand) |
+| Encryption | AWS managed key (`TableEncryption.AWS_MANAGED`) |
+| Deletion protection | вимкнено (навчальне середовище) |
+| Removal policy | `DESTROY` |
+| Update replace policy | `Delete` |
+
+Запис студента:
+
+```json
+{
+  "studentId": "3f1d2c9b-7a44-4e1c-9f2a-0d2c8e5b1a77",
+  "fullName": "Іван Петренко",
+  "group": "ІП-21",
+  "createdAt": "2026-11-11T18:00:00.000Z"
+}
+```
+
+### Ризик втрати даних
+
+`RemovalPolicy.DESTROY` означає, що під час видалення stack **усі дані таблиці
+будуть втрачені**. Це зроблено навмисно для навчального середовища, а в
+`cdk synth` додається попередження через CDK Annotations.
+
+Для production потрібно:
+
+- змінити removal policy на `RETAIN`;
+- увімкнути `deletionProtection: true`;
+- увімкнути point-in-time recovery та налаштувати бекапи;
+- керувати таблицею через окремий production stack.
+
+## `POST /students`
+
+Метод: `POST`
+
+Шлях: `/students`
+
+Авторизація: **тимчасово відсутня** (публічний контракт Фази 2).
+
+### Запит
+
+```json
+{
+  "fullName": "Іван Петренко",
+  "group": "ІП-21"
+}
+```
+
+Правила валідації:
+
+- тіло має бути JSON-об'єктом;
+- `fullName` — рядок, 1–200 символів після обрізання пробілів;
+- `group` — рядок, 1–50 символів після обрізання пробілів;
+- зайві поля ігноруються;
+- сервер генерує `studentId` (UUID v4) і `createdAt` (ISO 8601).
+
+### Успішна відповідь `201 Created`
+
+```json
+{
+  "studentId": "3f1d2c9b-7a44-4e1c-9f2a-0d2c8e5b1a77",
+  "fullName": "Іван Петренко",
+  "group": "ІП-21",
+  "createdAt": "2026-11-11T18:00:00.000Z"
+}
+```
+
+### Помилки
+
+`400 Bad Request`:
+
+```json
+{
+  "error": "fullName must be a non-empty string"
+}
+```
+
+`500 Internal Server Error` — без деталей DynamoDB:
+
+```json
+{
+  "error": "Internal server error"
+}
+```
+
+У логи не записуються ПІБ, група або повний запит. Для помилки логирується лише
+назва класу помилки.
+
+## `GET /admin/students`
+
+Обробник і тести реалізовані, але **маршрут не зареєстрований в API Gateway**.
+Публічного URL для перегляду персональних даних немає. Це перевіряється
+CDK-тестом.
+
+Контракт майбутнього захищеного маршруту:
+
+Query-параметри:
+
+- `limit` — ціле число від `1` до `100`, за замовчуванням `20`;
+- `cursor` — непрозорий токен наступної сторінки, необов'язковий.
+
+Відповідь `200 OK`:
+
+```json
+{
+  "items": [
+    {
+      "studentId": "3f1d2c9b-7a44-4e1c-9f2a-0d2c8e5b1a77",
+      "fullName": "Іван Петренко",
+      "group": "ІП-21",
+      "createdAt": "2026-11-11T18:00:00.000Z"
+    }
+  ],
+  "nextCursor": null
+}
+```
+
+Якщо є наступна сторінка, `nextCursor` містить рядок. Клієнт передає його назад
+у параметрі `cursor`. Якщо сторінок більше немає — `null`.
+
+### Пагінація та cursor
+
+- Використовується DynamoDB `Scan` із `Limit`, `ExclusiveStartKey` і
+  `LastEvaluatedKey`.
+- Cursor — base64url-кодований DynamoDB key `{ "studentId": "..." }`.
+- Формат вважається внутрішньою деталлю: клієнт не повинен його розбирати.
+- Максимальна довжина cursor — 512 символів.
+- Перевіряється base64url-формат, JSON-структура, наявність лише ключа
+  `studentId` і відповідність `studentId` формату UUID v4.
+- Некоректний cursor повертає `400 Bad Request`, а не `500`.
+- `Scan` **не гарантує стабільного сортування**. Порядок між сторінками не є
+  бізнес-контрактом.
+- Ліміт у 5000 записів на сторінку не реалізований, бо вимога не підтверджена.
+- Репозиторій повертає лише поля `studentId`, `fullName`, `group`, `createdAt`,
+  тому зайві атрибути з таблиці не потрапляють у відповідь.
+
+## Безпека
+
+- **Least privilege IAM.** Create Lambda має лише `dynamodb:PutItem`, List Lambda
+  — лише `dynamodb:Scan`. Обидва дозволи обмежені ARN таблиці.
+- `grantReadWriteData()` не використовується.
+- **Немає публічного admin-маршруту.** Lambda для перегляду існує, але API
+  Gateway її не викликає.
+- **ПІБ не логуються.** У разі помилки логуються лише назва помилки та
+  повідомлення без тіла запиту/вмісту таблиці.
+- **Помилки ініціалізації repository не розкриваються клієнту.** Відсутня
+  `STUDENTS_TABLE_NAME` або збій створення repository повертає generic `500`,
+  а в лог пише лише назва класу помилки.
+- **Немає AWS credentials** у репозиторії.
+- `.env` ігнорується Git.
+- `POST /students` тимчасово публічний. До production-деплою потрібні Cognito,
+  авторизація та rate limiting.
 
 ## Вимоги
 
-- **Node.js 22+** (перевірено на Node.js 24).
-- **pnpm 10+** (перевірено на pnpm 11.14).
+- Node.js 22+ (перевірено на Node.js 24).
+- pnpm 10+ (перевірено на pnpm 11.14).
 - AWS-акаунт **не потрібен** для `lint`, `typecheck`, `test`, `build` і `synth`.
 
 ## Встановлення
@@ -110,26 +306,25 @@ struct-lab-backend/
 pnpm install
 ```
 
-`pnpm-workspace.yaml` уже дозволяє esbuild виконати свій build-скрипт. Якщо pnpm
-все ж попросить підтвердження, виконайте:
+Якщо pnpm попросить підтвердити build-скрипт esbuild:
 
 ```bash
 pnpm approve-builds --all
 ```
 
-## Команди для локальної перевірки
+## Команди
 
 | Команда | Що робить | Звертається до AWS? |
 | --- | --- | --- |
-| `pnpm lint` | Перевіряє код ESLint. Порожній вивід = помилок немає. | Ні |
-| `pnpm typecheck` | Перевіряє типи TypeScript без створення файлів. | Ні |
-| `pnpm test` | Запускає всі тести Vitest один раз. | Ні |
-| `pnpm test:watch` | Запускає тести у режимі спостереження. | Ні |
-| `pnpm build` | Компілює `bin/`, `lib/`, `src/` у `dist/`. | Ні |
+| `pnpm lint` | Перевіряє код ESLint. | Ні |
+| `pnpm typecheck` | Перевіряє типи TypeScript. | Ні |
+| `pnpm test` | Запускає всі тести Vitest. | Ні |
+| `pnpm test:watch` | Запускає тести у watch-режимі. | Ні |
+| `pnpm build` | Компілює код у `dist/`. | Ні |
 | `pnpm synth` | Генерує CloudFormation-шаблон у `cdk.out/`. | Ні |
-| `pnpm cdk ...` | Проксі до CDK CLI, наприклад `pnpm cdk diff`. | `diff` — так, для реального акаунта |
+| `pnpm cdk ...` | Проксі до CDK CLI. | Залежить від команди |
 
-Повний локальний цикл перевірки:
+Повний локальний цикл:
 
 ```bash
 pnpm lint
@@ -141,114 +336,69 @@ pnpm synth
 
 Очікувані результати:
 
-- `lint` і `typecheck` завершуються без повідомлень про помилки;
-- `test` показує `2 passed` файли та `4 passed` тести;
-- `build` створює `dist/` з `.js`, `.d.ts` і source map файлами;
-- `synth` створює `cdk.out/StructLabBackendStack.template.json`.
-
-## Endpoint `GET /health`
-
-Контракт:
-
-- Метод: `GET`
-- Шлях: `/health`
-- Авторизація: відсутня (публічний endpoint)
-- Відповідь: `200 OK`, `Content-Type: application/json`
-
-Тіло відповіді:
-
-```json
-{
-  "status": "ok",
-  "service": "struct-lab-backend"
-}
-```
-
-Після майбутнього деплою (не в цій фазі) запит виглядатиме так:
-
-```bash
-curl https://<api-id>.execute-api.<region>.amazonaws.com/health
-```
-
-Точний URL з'явиться в output `HttpApiUrl` після деплою. Зараз перевірити
-поведінку можна тестом `pnpm test` — він викликає обробник напряму.
-
-## Як працює `cdk synth`
-
-1. CDK CLI читає `cdk.json` і бачить команду запуску `bin/app.ts`.
-2. Через `pnpm exec ts-node` виконується `bin/app.ts`.
-3. Код створює `StructLabStack`, де описані Lambda, HTTP API та маршрут.
-4. `NodejsFunction` викликає esbuild і збирає `src/handlers/health.ts` в один
-   JavaScript-файл для Lambda.
-5. CDK формує CloudFormation-шаблон і складає його в `cdk.out/`.
-
-`synth` **не створює** ресурсів в AWS, **не завантажує** файли в S3 і **не
-потребує** AWS-ключів. Він лише готує локальний опис інфраструктури.
-
-У stack навмисно не вказано `account` і `region`. Такий stack називається
-environment-agnostic: конкретний акаунт і регіон визначаться під час деплою.
-
-## Що не входить у Фазу 1
-
-- DynamoDB і зберігання студентів.
-- `POST /students` і `GET /admin/students`.
-- Cognito та авторизація викладача.
-- Rate limiting.
-- CORS для фронтенду.
-- Деплой в AWS, `cdk bootstrap`, AWS access keys.
-
-Ці речі додані до плану наступних фаз, щоб Фаза 1 залишалася маленькою та
-зрозумілою.
+- `lint` і `typecheck` — без помилок;
+- `test` — **9 тестових файлів, 97 тестів пройшли**;
+- `build` — тека `dist/` з `.js`, `.d.ts` і source maps;
+- `synth` — `cdk.out/StructLabBackendStack.template.json` і попередження про
+  видалення таблиці (це очікувано).
 
 ## Тестування
 
-- `test/health.test.ts` перевіряє чистий обробник: статус 200, заголовок
-  `content-type` і точний JSON. Жодних AWS-викликів.
-- `test/struct-lab-stack.test.ts` використовує `aws-cdk-lib/assertions`, синтезує
-  stack і перевіряє:
-  - рівно одну Lambda-функцію з runtime `nodejs22.x`;
-  - HTTP API з маршрутом `GET /health`;
-  - наявність output `HttpApiUrl`.
+Тести не потребують AWS, DynamoDB чи credentials. DynamoDB-репозиторій
+підміняється через dependency injection.
 
-Перший запуск тестів може бути повільнішим (приблизно 5–10 секунд), бо CDK
-збирає Lambda-код через esbuild. Тому синтез у тесті має збільшений таймаут.
+- `test/validation.test.ts` — валідація ПІБ, групи, `limit`, cursor.
+- `test/cursor.test.ts` — round-trip, base64url, обмеження довжини, некоректні
+  cursor.
+- `test/create-student.test.ts` — `201`, UUID, обрізання пробілів, base64 body,
+  `400`, `500`, відсутність ПІБ у логах.
+- `test/list-students.test.ts` — limit за замовчуванням, кастомний limit,
+  cursor, `nextCursor`, некоректні параметри, `500`, відсутність ПІБ у логах.
+- `test/students-repository.test.ts` — `PutCommand`, `ScanCommand` з `Limit` і
+  `ExclusiveStartKey`, перетворення `LastEvaluatedKey`, порожні результати,
+  поширення помилок DynamoDB.
+- `test/handler-initialization.test.ts` — generic `500` без витоку внутрішніх
+  деталей, якщо `STUDENTS_TABLE_NAME` відсутня.
+- `test/handler-initialization-error.test.ts` — generic `500`, якщо створення
+  repository завершується помилкою.
+- `test/health.test.ts` — `GET /health`.
+- `test/struct-lab-stack.test.ts` — DynamoDB, три Lambda, IAM, відсутність
+  `GET /admin/students`, наявність лише двох публічних маршрутів, output.
+
+## Як працює `cdk synth`
+
+1. CDK CLI читає `cdk.json` і запускає `bin/app.ts` через `ts-node`.
+2. `StructLabStack` створює DynamoDB, Lambda, IAM та HTTP API.
+3. `NodejsFunction` збирає кожен обробник через esbuild.
+4. AWS SDK для DynamoDB включається в бандл Lambda, щоб не залежати від версії
+   SDK у runtime.
+5. CDK формує CloudFormation-шаблон у `cdk.out/`.
+
+`synth` не створює ресурсів в AWS, не завантажує файли в S3 і не потребує
+AWS-ключів. Stack не має фіксованих `account`/`region` — вони визначаться під час
+деплою.
 
 ## Можливі проблеми
 
 | Проблема | Рішення |
 | --- | --- |
-| `ERR_PNPM_IGNORED_BUILDS: esbuild` | Виконати `pnpm approve-builds --all`. У цьому проєкті дозвіл уже є в `pnpm-workspace.yaml`. |
-| Тест CDK падає за таймаутом на повільній машині | Збільшити таймаут у `test/struct-lab-stack.test.ts` (зараз 30 секунд). |
-| `cdk synth` пише "85 feature flags are not configured" | Це інформаційне повідомлення, не помилка. Синтез успішний. |
+| `ERR_PNPM_IGNORED_BUILDS: esbuild` | `pnpm approve-builds --all`. |
+| Тест CDK падає за таймаутом | Перший бандл AWS SDK повільніший; таймаут у тесті — 60 секунд. |
+| `cdk synth` показує WARNING про видалення таблиці | Це навмисне попередження для навчального середовища. |
+| `cdk synth` пише про feature flags | Інформаційне повідомлення, не помилка. |
 | `pnpm synth` не знаходить `ts-node` | Виконати `pnpm install`. |
-| Потрібен деплой | Не робити в цій фазі. Для деплою знадобляться AWS-акаунт, налаштовані credentials і `cdk bootstrap`. |
-
-## Безпека та Git
-
-- Секретів і AWS-ключів у проєкті немає.
-- `.env` і `.env.*` ігноруються Git (окрім майбутнього `.env.example`).
-- `node_modules/`, `dist/`, `cdk.out/` і `coverage/` не комітяться.
-- Публічний `/health` не містить чутливих даних.
-- `/admin/students` у майбутньому обов'язково захистимо авторизацією до
-  публічного деплою.
+| Потрібен деплой | Не входить у Фазу 2. Потрібні AWS-акаунт, credentials, bootstrap і окреме рішення щодо захисту API. |
 
 ## Наступна фаза
 
-Детальний план: [`docs/phase-2-plan.md`](docs/phase-2-plan.md).
+Фаза 3:
 
-Коротко:
+1. Додати Cognito User Pool і групу викладачів.
+2. Додати JWT-authorizer для `/admin/*`.
+3. Підключити `GET /admin/students` до API Gateway лише після авторизації.
+4. Захистити `POST /students`.
+5. Додати rate limiting на рівні API Gateway.
+6. Налаштувати CORS для домену фронтенду.
+7. Додати integration-тести захищених маршрутів.
 
-1. Додати DynamoDB-таблицю `Students`.
-2. Реалізувати `POST /students` з валідацією ПІБ і групи.
-3. Реалізувати `GET /admin/students` з пагінацією.
-4. Додати IAM-дозволи Lambda на таблицю та тести для нових маршрутів.
-
-Авторизація викладача (Cognito) і rate limiting заплановані на наступні фази,
-щоб спочатку стабілізувати роботу з даними.
-
-## Корисні посилання
-
-- [AWS CDK v2](https://docs.aws.amazon.com/cdk/v2/guide/)
-- [API Gateway HTTP API](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api.html)
-- [AWS Lambda Node.js runtime](https://docs.aws.amazon.com/lambda/latest/dg/lambda-nodejs.html)
-- [Vitest](https://vitest.dev/)
+Детальніше: [`docs/phase-2-plan.md`](docs/phase-2-plan.md).
