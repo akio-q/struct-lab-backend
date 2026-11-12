@@ -9,10 +9,10 @@ import type { Student } from '../students/types';
 import { parseCreateStudentInput } from '../students/validation';
 
 /**
- * Factory with dependency injection: tests pass a fake repository, while the
- * deployed Lambda uses the default DynamoDB repository below.
+ * Public student registration. The handler validates the request, creates a
+ * student record, and persists it; it does not require an authorizer context.
  */
-export const buildCreateStudentHandler = (
+const buildRepositoryHandler = (
   repository: StudentsRepository,
 ): HttpHandler => {
   return async (event) => {
@@ -45,6 +45,15 @@ export const buildCreateStudentHandler = (
   };
 };
 
+/**
+ * Factory with dependency injection: tests pass a fake repository, while the
+ * deployed Lambda uses the default DynamoDB repository below. Registration is
+ * public, so no authorization runs before validation or persistence.
+ */
+export const buildCreateStudentHandler = (
+  repository: StudentsRepository,
+): HttpHandler => buildRepositoryHandler(repository);
+
 const repositoryInitializationErrorHandler: HttpHandler = async () =>
   jsonResponse(500, { error: 'Internal server error' });
 
@@ -61,7 +70,7 @@ const getDefaultHandler = (): HttpHandler => {
   }
 
   try {
-    defaultHandler = buildCreateStudentHandler(
+    defaultHandler = buildRepositoryHandler(
       createDynamoDbStudentsRepository(),
     );
 

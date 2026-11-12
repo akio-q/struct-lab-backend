@@ -1,3 +1,4 @@
+import { withTeacherAuthorization } from '../lib/auth';
 import { getErrorName } from '../lib/errors';
 import { jsonResponse } from '../lib/http';
 import type { HttpHandler } from '../lib/http';
@@ -8,10 +9,10 @@ import type { StudentCursor } from '../students/types';
 import { parsePaginationQuery } from '../students/validation';
 
 /**
- * Factory with dependency injection for tests. The handler is intentionally
- * not connected to API Gateway until Cognito protects /admin routes.
+ * Business logic factory kept free of authorization so the production handler
+ * can authorize before lazy repository initialization.
  */
-export const buildListStudentsHandler = (
+const buildRepositoryHandler = (
   repository: StudentsRepository,
 ): HttpHandler => {
   return async (event) => {
@@ -49,6 +50,14 @@ export const buildListStudentsHandler = (
   };
 };
 
+/**
+ * Factory with dependency injection for tests. Authorization runs before query
+ * validation and before any repository operation.
+ */
+export const buildListStudentsHandler = (
+  repository: StudentsRepository,
+): HttpHandler => withTeacherAuthorization(buildRepositoryHandler(repository));
+
 const repositoryInitializationErrorHandler: HttpHandler = async () =>
   jsonResponse(500, { error: 'Internal server error' });
 
@@ -65,7 +74,7 @@ const getDefaultHandler = (): HttpHandler => {
   }
 
   try {
-    defaultHandler = buildListStudentsHandler(
+    defaultHandler = buildRepositoryHandler(
       createDynamoDbStudentsRepository(),
     );
 
@@ -80,4 +89,6 @@ const getDefaultHandler = (): HttpHandler => {
   }
 };
 
-export const handler: HttpHandler = (event) => getDefaultHandler()(event);
+export const handler: HttpHandler = withTeacherAuthorization((event) =>
+  getDefaultHandler()(event),
+);

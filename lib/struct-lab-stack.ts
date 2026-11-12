@@ -9,7 +9,9 @@ import {
 } from 'aws-cdk-lib';
 import type { StackProps } from 'aws-cdk-lib';
 import { HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
+import { HttpUserPoolAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import { UserPool } from 'aws-cdk-lib/aws-cognito';
 import {
   AttributeType,
   BillingMode,
@@ -21,6 +23,8 @@ import { Runtime } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { Construct } from 'constructs';
 
+import { TEACHERS_GROUP_NAME } from '../src/constants';
+
 const lambdaBundling = {
   minify: true,
   sourceMap: true,
@@ -31,10 +35,11 @@ const lambdaBundling = {
 /**
  * Core infrastructure for StructLab:
  * - DynamoDB table for students;
+ * - Cognito user pool with a single public app client and the teachers group;
  * - Lambda for GET /health (public);
- * - Lambda for POST /students (public in Phase 2);
- * - Lambda for GET /admin/students (exists, but is intentionally not routed
- *   through API Gateway until Cognito is added in Phase 3).
+ * - Lambda for POST /students (public student registration);
+ * - Lambda for GET /admin/students (teacher-only JWT);
+ * - JWT authorizer protecting the admin student route.
  */
 export class StructLabStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
@@ -59,6 +64,37 @@ export class StructLabStack extends Stack {
         'use RemovalPolicy.RETAIN, enable deletion protection, and configure ' +
         'backups.',
     );
+
+    const teachersUserPool = new UserPool(this, 'TeachersUserPool', {
+      selfSignUpEnabled: false,
+      passwordPolicy: {
+        minLength: 12,
+        requireLowercase: true,
+        requireUppercase: true,
+        requireDigits: true,
+        requireSymbols: true,
+      },
+      // Only the user pool is retained. The app client and teachers group are
+      // not explicitly retained, so removing the stack deletes them. A later
+      // deploy creates new Cognito resources and does not automatically reuse
+      // this pool.
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+
+    // Exactly one public client (no secret). OAuth/Hosted UI is disabled
+    // because this phase defines no callback URLs or domain.
+    const teachersAppClient = teachersUserPool.addClient('TeachersAppClient', {
+      generateSecret: false,
+      disableOAuth: true,
+      authFlows: {
+        userSrp: true,
+      },
+      accessTokenValidity: Duration.minutes(30),
+    });
+
+    teachersUserPool.addGroup('TeachersGroup', {
+      groupName: TEACHERS_GROUP_NAME,
+    });
 
     const healthFunction = new NodejsFunction(this, 'HealthFunction', {
       description: 'Health check handler for the StructLab backend',
@@ -92,7 +128,7 @@ export class StructLabStack extends Stack {
       'ListStudentsFunction',
       {
         description:
-          'Lists students with cursor-based pagination (not publicly routed)',
+          'Lists students with cursor-based pagination (teacher-only)',
         entry: join(__dirname, '..', 'src', 'handlers', 'list-students.ts'),
         handler: 'handler',
         runtime: Runtime.NODEJS_22_X,
@@ -126,6 +162,15 @@ export class StructLabStack extends Stack {
       description: 'HTTP API for the StructLab backend',
     });
 
+    const teachersAuthorizer = new HttpUserPoolAuthorizer(
+      'TeachersJwtAuthorizer',
+      teachersUserPool,
+      {
+        userPoolClients: [teachersAppClient],
+        identitySource: ['$request.header.Authorization'],
+      },
+    );
+
     httpApi.addRoutes({
       path: '/health',
       methods: [HttpMethod.GET],
@@ -144,13 +189,29 @@ export class StructLabStack extends Stack {
       ),
     });
 
-    // Deliberately no GET /admin/students route. The list Lambda and its
-    // least-privilege IAM role are prepared, but exposing students' personal
-    // data publicly is forbidden until Cognito auth is implemented.
+    httpApi.addRoutes({
+      path: '/admin/students',
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration(
+        'ListStudentsIntegration',
+        listStudentsFunction,
+      ),
+      authorizer: teachersAuthorizer,
+    });
 
     new CfnOutput(this, 'HttpApiUrl', {
       value: httpApi.apiEndpoint,
       description: 'Base URL of the StructLab HTTP API',
+    });
+
+    new CfnOutput(this, 'UserPoolId', {
+      value: teachersUserPool.userPoolId,
+      description: 'Cognito user pool used for teacher authentication',
+    });
+
+    new CfnOutput(this, 'UserPoolClientId', {
+      value: teachersAppClient.userPoolClientId,
+      description: 'Public Cognito app client used by the frontend',
     });
   }
 }
