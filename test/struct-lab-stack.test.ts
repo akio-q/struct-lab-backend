@@ -64,6 +64,7 @@ interface UserPoolResource {
 interface UserPoolClientResource {
   Properties?: {
     GenerateSecret?: boolean;
+    UserPoolId?: unknown;
     ExplicitAuthFlows?: string[];
     AccessTokenValidity?: number;
     TokenValidityUnits?: {
@@ -73,8 +74,10 @@ interface UserPoolClientResource {
     };
     AllowedOAuthFlowsUserPoolClient?: boolean;
     AllowedOAuthFlows?: string[];
+    AllowedOAuthScopes?: string[];
     CallbackURLs?: string[];
     LogoutURLs?: string[];
+    SupportedIdentityProviders?: string[];
   };
 }
 
@@ -280,11 +283,15 @@ describe('StructLabStack', () => {
     template.resourceCountIs('AWS::Cognito::UserPoolClient', 1);
     template.resourceCountIs('AWS::Cognito::UserPoolDomain', 0);
 
+    const [poolLogicalId] = getSingleResource<UserPoolResource>(
+      'AWS::Cognito::UserPool',
+    );
     const [, client] = getSingleResource<UserPoolClientResource>(
       'AWS::Cognito::UserPoolClient',
     );
 
     expect(client.Properties?.GenerateSecret).toBe(false);
+    expect(client.Properties?.UserPoolId).toEqual({ Ref: poolLogicalId });
     expect(client.Properties?.ExplicitAuthFlows).toEqual([
       'ALLOW_USER_SRP_AUTH',
       'ALLOW_REFRESH_TOKEN_AUTH',
@@ -295,8 +302,12 @@ describe('StructLabStack', () => {
     });
     expect(client.Properties?.AllowedOAuthFlowsUserPoolClient).toBe(false);
     expect(client.Properties?.AllowedOAuthFlows).toBeUndefined();
+    expect(client.Properties?.AllowedOAuthScopes).toBeUndefined();
     expect(client.Properties?.CallbackURLs).toBeUndefined();
     expect(client.Properties?.LogoutURLs).toBeUndefined();
+    expect(client.Properties?.SupportedIdentityProviders).toEqual([
+      'COGNITO',
+    ]);
   });
 
   it('creates the teachers group in the user pool', () => {

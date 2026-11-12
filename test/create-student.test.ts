@@ -107,7 +107,15 @@ describe('POST /students handler', () => {
     const handler = buildCreateStudentHandler(repository);
 
     const response = await handler(
-      createAuthenticatedApiEvent({ body: VALID_BODY }),
+      createAuthenticatedApiEvent(
+        { body: VALID_BODY },
+        {
+          token_use: 'access',
+          'cognito:groups': ['teachers'],
+          email: 'teacher@example.com',
+          token: 'secret-token-value',
+        },
+      ),
     );
 
     expect(response.statusCode).toBe(500);
@@ -122,6 +130,8 @@ describe('POST /students handler', () => {
       .join(' ');
     expect(loggedText).not.toContain('Іван Петренко');
     expect(loggedText).not.toContain('ІП-21');
+    expect(loggedText).not.toContain('teacher@example.com');
+    expect(loggedText).not.toContain('secret-token-value');
   });
 
   describe('authorization', () => {

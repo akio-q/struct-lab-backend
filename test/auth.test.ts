@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import type { APIGatewayProxyEventV2 } from 'aws-lambda';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { authorizeTeacherAccess } from '../src/lib/auth';
+import {
+  authorizeTeacherAccess,
+  withTeacherAuthorization,
+} from '../src/lib/auth';
 
 const UNAUTHORIZED = {
   authorized: false,
@@ -43,6 +47,10 @@ const createClaimsWithoutGroups = (): Record<string, unknown> => ({
   token_use: 'access',
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe('authorizeTeacherAccess', () => {
   describe('missing or malformed authorizer context', () => {
     const cases: Array<[string, unknown]> = [
@@ -56,12 +64,36 @@ describe('authorizeTeacherAccess', () => {
         { requestContext: {} },
       ],
       [
+        'a string requestContext',
+        { requestContext: 'not-an-object' },
+      ],
+      [
+        'an array requestContext',
+        { requestContext: [] },
+      ],
+      [
         'an authorizer without a jwt object',
         { requestContext: { authorizer: {} } },
       ],
       [
+        'a string authorizer',
+        { requestContext: { authorizer: 'not-an-object' } },
+      ],
+      [
+        'an array authorizer',
+        { requestContext: { authorizer: [] } },
+      ],
+      [
         'a jwt object without claims',
         { requestContext: { authorizer: { jwt: {} } } },
+      ],
+      [
+        'a string jwt object',
+        { requestContext: { authorizer: { jwt: 'not-an-object' } } },
+      ],
+      [
+        'an array jwt object',
+        { requestContext: { authorizer: { jwt: [] } } },
       ],
       [
         'claims that are not an object',
@@ -181,4 +213,53 @@ describe('authorizeTeacherAccess', () => {
       });
     }
   });
+});
+
+describe('withTeacherAuthorization', () => {
+  it.each([
+    [
+      'an ID token',
+      createEvent(
+        createClaims({
+          token_use: 'id',
+          email: 'teacher@example.com',
+          token: 'secret-token-value',
+        }),
+      ),
+      401,
+    ],
+    [
+      'a non-teacher access token',
+      createEvent(
+        createClaims({
+          'cognito:groups': ['students'],
+          email: 'teacher@example.com',
+          token: 'secret-token-value',
+        }),
+      ),
+      403,
+    ],
+  ])(
+    'emits no console output when denying %s',
+    async (_description, event, expectedStatus) => {
+      const consoleSpies = [
+        vi.spyOn(console, 'debug'),
+        vi.spyOn(console, 'error'),
+        vi.spyOn(console, 'info'),
+        vi.spyOn(console, 'log'),
+        vi.spyOn(console, 'warn'),
+      ].map((spy) => spy.mockImplementation(() => undefined));
+      const handler = vi.fn(async () => ({ statusCode: 200, body: 'ok' }));
+      const wrapped = withTeacherAuthorization(handler);
+
+      const response = await wrapped(event as APIGatewayProxyEventV2);
+
+      expect(response.statusCode).toBe(expectedStatus);
+      expect(handler).not.toHaveBeenCalled();
+
+      for (const spy of consoleSpies) {
+        expect(spy).not.toHaveBeenCalled();
+      }
+    },
+  );
 });

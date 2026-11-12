@@ -168,7 +168,17 @@ describe('GET /admin/students handler', () => {
       .mockImplementation(() => undefined);
     const handler = buildListStudentsHandler(repository);
 
-    const response = await handler(createAuthenticatedApiEvent());
+    const response = await handler(
+      createAuthenticatedApiEvent(
+        {},
+        {
+          token_use: 'access',
+          'cognito:groups': ['teachers'],
+          email: 'teacher@example.com',
+          token: 'secret-token-value',
+        },
+      ),
+    );
 
     expect(response.statusCode).toBe(500);
     expect(JSON.parse(response.body ?? 'null')).toEqual({
@@ -182,6 +192,8 @@ describe('GET /admin/students handler', () => {
       .join(' ');
     expect(loggedText).not.toContain('Іван Петренко');
     expect(loggedText).not.toContain('ІП-21');
+    expect(loggedText).not.toContain('teacher@example.com');
+    expect(loggedText).not.toContain('secret-token-value');
   });
 
   describe('authorization', () => {
