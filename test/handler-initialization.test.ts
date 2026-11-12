@@ -32,45 +32,13 @@ describe('default Lambda handlers without STUDENTS_TABLE_NAME', () => {
     restoreTableName();
   });
 
-  it('returns 401 from the create handler without attempting initialization', async () => {
+  it('returns a generic 500 from the public create handler without leaking internals', async () => {
     const consoleSpy = vi
       .spyOn(console, 'error')
       .mockImplementation(() => undefined);
 
     const response = await createStudentHandler(
       createApiEvent({ body: CREATE_BODY }),
-    );
-
-    expect(response.statusCode).toBe(401);
-    expect(JSON.parse(response.body ?? 'null')).toEqual({
-      error: 'Unauthorized',
-    });
-    expect(response.body).not.toContain('STUDENTS_TABLE_NAME');
-    expect(consoleSpy).not.toHaveBeenCalled();
-  });
-
-  it('returns 401 from the list handler without attempting initialization', async () => {
-    const consoleSpy = vi
-      .spyOn(console, 'error')
-      .mockImplementation(() => undefined);
-
-    const response = await listStudentsHandler(createApiEvent());
-
-    expect(response.statusCode).toBe(401);
-    expect(JSON.parse(response.body ?? 'null')).toEqual({
-      error: 'Unauthorized',
-    });
-    expect(response.body).not.toContain('STUDENTS_TABLE_NAME');
-    expect(consoleSpy).not.toHaveBeenCalled();
-  });
-
-  it('returns a generic 500 from the create handler for authenticated requests without leaking internals', async () => {
-    const consoleSpy = vi
-      .spyOn(console, 'error')
-      .mockImplementation(() => undefined);
-
-    const response = await createStudentHandler(
-      createAuthenticatedApiEvent({ body: CREATE_BODY }),
     );
 
     expect(response.statusCode).toBe(500);
@@ -86,6 +54,21 @@ describe('default Lambda handlers without STUDENTS_TABLE_NAME', () => {
       .join(' ');
     expect(loggedText).not.toContain('STUDENTS_TABLE_NAME');
     expect(loggedText).not.toContain('Іван Петренко');
+  });
+
+  it('returns 401 from the list handler without attempting initialization', async () => {
+    const consoleSpy = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+
+    const response = await listStudentsHandler(createApiEvent());
+
+    expect(response.statusCode).toBe(401);
+    expect(JSON.parse(response.body ?? 'null')).toEqual({
+      error: 'Unauthorized',
+    });
+    expect(response.body).not.toContain('STUDENTS_TABLE_NAME');
+    expect(consoleSpy).not.toHaveBeenCalled();
   });
 
   it('returns a generic 500 from the list handler for authenticated requests without leaking internals', async () => {

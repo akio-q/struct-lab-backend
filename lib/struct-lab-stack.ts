@@ -37,9 +37,9 @@ const lambdaBundling = {
  * - DynamoDB table for students;
  * - Cognito user pool with a single public app client and the teachers group;
  * - Lambda for GET /health (public);
- * - Lambda for POST /students (teacher-only JWT);
+ * - Lambda for POST /students (public student registration);
  * - Lambda for GET /admin/students (teacher-only JWT);
- * - JWT authorizer protecting both student routes.
+ * - JWT authorizer protecting the admin student route.
  */
 export class StructLabStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
@@ -184,7 +184,6 @@ export class StructLabStack extends Stack {
         'CreateStudentIntegration',
         createStudentFunction,
       ),
-      authorizer: teachersAuthorizer,
     });
 
     httpApi.addRoutes({

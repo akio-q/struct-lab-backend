@@ -31,12 +31,12 @@ describe('POST /students handler', () => {
     vi.restoreAllMocks();
   });
 
-  it('creates a student and returns 201 with the stored record', async () => {
+  it('creates a student from a public request without a JWT context', async () => {
     const { repository, createStudent } = buildRepository();
     const handler = buildCreateStudentHandler(repository);
 
     const response = await handler(
-      createAuthenticatedApiEvent({
+      createApiEvent({
         body: JSON.stringify({
           fullName: '  Іван Петренко  ',
           group: '  ІП-21  ',
@@ -62,7 +62,7 @@ describe('POST /students handler', () => {
     expect(createStudent).toHaveBeenCalledWith(student);
   });
 
-  it('supports a base64-encoded JSON body', async () => {
+  it('supports a base64-encoded JSON body from a public request', async () => {
     const { repository, createStudent } = buildRepository();
     const handler = buildCreateStudentHandler(repository);
     const body = Buffer.from(
@@ -71,7 +71,27 @@ describe('POST /students handler', () => {
     ).toString('base64');
 
     const response = await handler(
-      createAuthenticatedApiEvent({ body, isBase64Encoded: true }),
+      createApiEvent({ body, isBase64Encoded: true }),
+    );
+
+    expect(response.statusCode).toBe(201);
+    expect(createStudent).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not require the teachers group to register a student', async () => {
+    const { repository, createStudent } = buildRepository();
+    const handler = buildCreateStudentHandler(repository);
+
+    const response = await handler(
+      createAuthenticatedApiEvent(
+        { body: VALID_BODY },
+        {
+          token_use: 'access',
+          'cognito:groups': ['students'],
+          email: 'student@example.com',
+          token: 'secret-token-value',
+        },
+      ),
     );
 
     expect(response.statusCode).toBe(201);
@@ -87,18 +107,18 @@ describe('POST /students handler', () => {
       'too long fullName',
       JSON.stringify({ fullName: 'a'.repeat(201), group: 'ІП-21' }),
     ],
-  ])('returns 400 for %s', async (_caseName, body) => {
+  ])('returns 400 for %s from a public request', async (_caseName, body) => {
     const { repository, createStudent } = buildRepository();
     const handler = buildCreateStudentHandler(repository);
 
-    const response = await handler(createAuthenticatedApiEvent({ body }));
+    const response = await handler(createApiEvent({ body }));
 
     expect(response.statusCode).toBe(400);
     expect(JSON.parse(response.body ?? 'null')).toHaveProperty('error');
     expect(createStudent).not.toHaveBeenCalled();
   });
 
-  it('returns a generic 500 and does not log PII when DynamoDB fails', async () => {
+  it('returns a generic 500 and does not log PII or tokens when DynamoDB fails', async () => {
     const { repository, createStudent } = buildRepository();
     createStudent.mockRejectedValueOnce(new Error('DynamoDB unavailable'));
     const consoleSpy = vi
@@ -132,108 +152,5 @@ describe('POST /students handler', () => {
     expect(loggedText).not.toContain('ІП-21');
     expect(loggedText).not.toContain('teacher@example.com');
     expect(loggedText).not.toContain('secret-token-value');
-  });
-
-  describe('authorization', () => {
-    it('returns 401 and does not call the repository without an authorizer context', async () => {
-      const { repository, createStudent } = buildRepository();
-      const handler = buildCreateStudentHandler(repository);
-
-      const response = await handler(createApiEvent({ body: VALID_BODY }));
-
-      expect(response.statusCode).toBe(401);
-      expect(JSON.parse(response.body ?? 'null')).toEqual({
-        error: 'Unauthorized',
-      });
-      expect(createStudent).not.toHaveBeenCalled();
-    });
-
-    it('returns 401 and does not call the repository for an ID token', async () => {
-      const { repository, createStudent } = buildRepository();
-      const handler = buildCreateStudentHandler(repository);
-
-      const response = await handler(
-        createAuthenticatedApiEvent(
-          { body: VALID_BODY },
-          { token_use: 'id', 'cognito:groups': ['teachers'] },
-        ),
-      );
-
-      expect(response.statusCode).toBe(401);
-      expect(JSON.parse(response.body ?? 'null')).toEqual({
-        error: 'Unauthorized',
-      });
-      expect(createStudent).not.toHaveBeenCalled();
-    });
-
-    it('returns 403 and does not call the repository without the teachers group', async () => {
-      const { repository, createStudent } = buildRepository();
-      const handler = buildCreateStudentHandler(repository);
-
-      const response = await handler(
-        createAuthenticatedApiEvent(
-          { body: VALID_BODY },
-          { token_use: 'access', 'cognito:groups': ['students'] },
-        ),
-      );
-
-      expect(response.statusCode).toBe(403);
-      expect(JSON.parse(response.body ?? 'null')).toEqual({
-        error: 'Forbidden',
-      });
-      expect(createStudent).not.toHaveBeenCalled();
-    });
-
-    it('returns 401 before body validation when unauthenticated', async () => {
-      const { repository, createStudent } = buildRepository();
-      const handler = buildCreateStudentHandler(repository);
-
-      const response = await handler(
-        createApiEvent({ body: '{"fullName":' }),
-      );
-
-      expect(response.statusCode).toBe(401);
-      expect(createStudent).not.toHaveBeenCalled();
-    });
-
-    it('returns 403 before body validation without the teachers group', async () => {
-      const { repository, createStudent } = buildRepository();
-      const handler = buildCreateStudentHandler(repository);
-
-      const response = await handler(
-        createAuthenticatedApiEvent(
-          { body: '{"fullName":' },
-          { token_use: 'access', 'cognito:groups': [] },
-        ),
-      );
-
-      expect(response.statusCode).toBe(403);
-      expect(createStudent).not.toHaveBeenCalled();
-    });
-
-    it('does not log tokens, claims, or PII when denying access', async () => {
-      const { repository, createStudent } = buildRepository();
-      const consoleSpy = vi
-        .spyOn(console, 'error')
-        .mockImplementation(() => undefined);
-      const handler = buildCreateStudentHandler(repository);
-
-      const response = await handler(
-        createAuthenticatedApiEvent(
-          { body: VALID_BODY },
-          {
-            token_use: 'id',
-            'cognito:groups': ['teachers'],
-            email: 'teacher@example.com',
-            token: 'secret-token-value',
-            fullName: 'Іван Петренко',
-          },
-        ),
-      );
-
-      expect(response.statusCode).toBe(401);
-      expect(createStudent).not.toHaveBeenCalled();
-      expect(consoleSpy).not.toHaveBeenCalled();
-    });
   });
 });

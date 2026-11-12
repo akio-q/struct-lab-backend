@@ -36,45 +36,13 @@ describe('default Lambda handlers when repository creation fails', () => {
     vi.restoreAllMocks();
   });
 
-  it('does not initialize the repository for unauthenticated create requests', async () => {
+  it('returns a generic 500 from the public create handler without leaking details', async () => {
     const consoleSpy = vi
       .spyOn(console, 'error')
       .mockImplementation(() => undefined);
 
     const response = await createStudentHandler(
       createApiEvent({ body: CREATE_BODY }),
-    );
-
-    expect(response.statusCode).toBe(401);
-    expect(JSON.parse(response.body ?? 'null')).toEqual({
-      error: 'Unauthorized',
-    });
-    expect(createDynamoDbStudentsRepository).not.toHaveBeenCalled();
-    expect(consoleSpy).not.toHaveBeenCalled();
-  });
-
-  it('does not initialize the repository for unauthenticated list requests', async () => {
-    const consoleSpy = vi
-      .spyOn(console, 'error')
-      .mockImplementation(() => undefined);
-
-    const response = await listStudentsHandler(createApiEvent());
-
-    expect(response.statusCode).toBe(401);
-    expect(JSON.parse(response.body ?? 'null')).toEqual({
-      error: 'Unauthorized',
-    });
-    expect(createDynamoDbStudentsRepository).not.toHaveBeenCalled();
-    expect(consoleSpy).not.toHaveBeenCalled();
-  });
-
-  it('returns a generic 500 from the create handler for authenticated requests without leaking details', async () => {
-    const consoleSpy = vi
-      .spyOn(console, 'error')
-      .mockImplementation(() => undefined);
-
-    const response = await createStudentHandler(
-      createAuthenticatedApiEvent({ body: CREATE_BODY }),
     );
 
     expect(response.statusCode).toBe(500);
@@ -91,6 +59,21 @@ describe('default Lambda handlers when repository creation fails', () => {
       .join(' ');
     expect(loggedText).not.toContain('failed to create DynamoDB repository');
     expect(loggedText).not.toContain('Іван Петренко');
+  });
+
+  it('does not initialize the repository for unauthenticated list requests', async () => {
+    const consoleSpy = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+
+    const response = await listStudentsHandler(createApiEvent());
+
+    expect(response.statusCode).toBe(401);
+    expect(JSON.parse(response.body ?? 'null')).toEqual({
+      error: 'Unauthorized',
+    });
+    expect(createDynamoDbStudentsRepository).not.toHaveBeenCalled();
+    expect(consoleSpy).not.toHaveBeenCalled();
   });
 
   it('returns a generic 500 from the list handler for authenticated requests without leaking details', async () => {

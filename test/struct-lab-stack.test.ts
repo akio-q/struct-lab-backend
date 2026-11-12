@@ -357,31 +357,31 @@ describe('StructLabStack', () => {
     });
   });
 
-  it('protects both student routes with the JWT authorizer', () => {
+  it('protects only the admin student route with the JWT authorizer', () => {
     const [authorizerLogicalId] = getSingleResource<AuthorizerResource>(
       'AWS::ApiGatewayV2::Authorizer',
     );
+    const route = findRoute('GET /admin/students');
 
-    for (const routeKey of ['GET /admin/students', 'POST /students']) {
-      const route = findRoute(routeKey);
-
-      expect(route.Properties?.AuthorizationType).toBe('JWT');
-      expect(route.Properties?.AuthorizerId).toEqual({
-        Ref: authorizerLogicalId,
-      });
-    }
+    expect(route.Properties?.AuthorizationType).toBe('JWT');
+    expect(route.Properties?.AuthorizerId).toEqual({
+      Ref: authorizerLogicalId,
+    });
   });
 
-  it('keeps GET /health public and exposes no other public routes', () => {
+  it('keeps GET /health and POST /students public', () => {
     expect(getRouteKeys()).toEqual([
       'GET /admin/students',
       'GET /health',
       'POST /students',
     ]);
 
-    const healthRoute = findRoute('GET /health');
-    expect(healthRoute.Properties?.AuthorizationType ?? 'NONE').toBe('NONE');
-    expect(healthRoute.Properties?.AuthorizerId).toBeUndefined();
+    for (const routeKey of ['GET /health', 'POST /students']) {
+      const route = findRoute(routeKey);
+
+      expect(route.Properties?.AuthorizationType ?? 'NONE').toBe('NONE');
+      expect(route.Properties?.AuthorizerId).toBeUndefined();
+    }
 
     const publicRouteKeys = Object.values(
       getResources<RouteResource>('AWS::ApiGatewayV2::Route'),
@@ -391,9 +391,10 @@ describe('StructLabStack', () => {
           (route.Properties?.AuthorizationType ?? 'NONE') !== 'JWT',
       )
       .map((route) => route.Properties?.RouteKey)
-      .filter((routeKey): routeKey is string => typeof routeKey === 'string');
+      .filter((routeKey): routeKey is string => typeof routeKey === 'string')
+      .sort();
 
-    expect(publicRouteKeys).toEqual(['GET /health']);
+    expect(publicRouteKeys).toEqual(['GET /health', 'POST /students']);
   });
 
   it('does not grant Cognito permissions to Lambda roles', () => {
