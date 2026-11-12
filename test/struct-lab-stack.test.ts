@@ -37,12 +37,68 @@ interface IamPolicyResource {
 interface RouteResource {
   Properties?: {
     RouteKey?: string;
+    AuthorizationType?: string;
+    AuthorizerId?: { Ref?: string };
+  };
+}
+
+interface UserPoolResource {
+  DeletionPolicy?: string;
+  UpdateReplacePolicy?: string;
+  Properties?: {
+    AdminCreateUserConfig?: {
+      AllowAdminCreateUserOnly?: boolean;
+    };
+    Policies?: {
+      PasswordPolicy?: {
+        MinimumLength?: number;
+        RequireLowercase?: boolean;
+        RequireUppercase?: boolean;
+        RequireNumbers?: boolean;
+        RequireSymbols?: boolean;
+      };
+    };
+  };
+}
+
+interface UserPoolClientResource {
+  Properties?: {
+    GenerateSecret?: boolean;
+    ExplicitAuthFlows?: string[];
+    AccessTokenValidity?: number;
+    TokenValidityUnits?: {
+      AccessToken?: string;
+      IdToken?: string;
+      RefreshToken?: string;
+    };
+    AllowedOAuthFlowsUserPoolClient?: boolean;
+    AllowedOAuthFlows?: string[];
+    CallbackURLs?: string[];
+    LogoutURLs?: string[];
+  };
+}
+
+interface UserPoolGroupResource {
+  Properties?: {
+    GroupName?: string;
+    UserPoolId?: unknown;
+  };
+}
+
+interface AuthorizerResource {
+  Properties?: {
+    AuthorizerType?: string;
+    IdentitySource?: string[];
+    JwtConfiguration?: {
+      Audience?: unknown[];
+      Issuer?: unknown;
+    };
   };
 }
 
 const CREATE_DESCRIPTION = 'Creates a student in DynamoDB';
 const LIST_DESCRIPTION =
-  'Lists students with cursor-based pagination (not publicly routed)';
+  'Lists students with cursor-based pagination (teacher-only)';
 
 describe('StructLabStack', () => {
   let template: Template;
@@ -56,6 +112,17 @@ describe('StructLabStack', () => {
 
   const getResources = <T>(type: string): Record<string, T> =>
     template.findResources(type) as Record<string, T>;
+
+  const getSingleResource = <T>(type: string): [string, T] => {
+    const entries = Object.entries(getResources<T>(type));
+    const only = entries[0];
+
+    if (entries.length !== 1 || only === undefined) {
+      throw new Error(`Expected exactly one ${type}, found ${entries.length}`);
+    }
+
+    return only;
+  };
 
   const findLambda = (description: string): LambdaResource => {
     const lambda = Object.values(
@@ -95,6 +162,18 @@ describe('StructLabStack', () => {
       );
   };
 
+  const findRoute = (routeKey: string): RouteResource => {
+    const route = Object.values(
+      getResources<RouteResource>('AWS::ApiGatewayV2::Route'),
+    ).find((candidate) => candidate.Properties?.RouteKey === routeKey);
+
+    if (!route) {
+      throw new Error(`Route not found: ${routeKey}`);
+    }
+
+    return route;
+  };
+
   const getRouteKeys = (): string[] =>
     Object.values(getResources<RouteResource>('AWS::ApiGatewayV2::Route'))
       .map((route) => route.Properties?.RouteKey)
@@ -118,7 +197,7 @@ describe('StructLabStack', () => {
     });
   });
 
-  it('creates three Node.js Lambda functions', () => {
+  it('creates exactly three Node.js Lambda functions', () => {
     template.resourceCountIs('AWS::Lambda::Function', 3);
 
     for (const description of [
@@ -134,11 +213,15 @@ describe('StructLabStack', () => {
   });
 
   it('passes the table name only to the student Lambdas', () => {
+    const healthVariables = findLambda(
+      'Health check handler for the StructLab backend',
+    ).Properties?.Environment?.Variables;
     const createVariables = findLambda(CREATE_DESCRIPTION).Properties
       ?.Environment?.Variables;
     const listVariables = findLambda(LIST_DESCRIPTION).Properties?.Environment
       ?.Variables;
 
+    expect(healthVariables).toBeUndefined();
     expect(createVariables).toHaveProperty('STUDENTS_TABLE_NAME');
     expect(listVariables).toHaveProperty('STUDENTS_TABLE_NAME');
   });
@@ -172,16 +255,166 @@ describe('StructLabStack', () => {
     }
   });
 
-  it('exposes only GET /health and POST /students', () => {
-    expect(getRouteKeys()).toEqual(['GET /health', 'POST /students']);
+  it('creates exactly one locked-down Cognito user pool', () => {
+    template.resourceCountIs('AWS::Cognito::UserPool', 1);
+
+    const [, userPool] = getSingleResource<UserPoolResource>(
+      'AWS::Cognito::UserPool',
+    );
+
+    expect(userPool.DeletionPolicy).toBe('Retain');
+    expect(userPool.UpdateReplacePolicy).toBe('Retain');
+    expect(
+      userPool.Properties?.AdminCreateUserConfig?.AllowAdminCreateUserOnly,
+    ).toBe(true);
+    expect(userPool.Properties?.Policies?.PasswordPolicy).toEqual({
+      MinimumLength: 12,
+      RequireLowercase: true,
+      RequireUppercase: true,
+      RequireNumbers: true,
+      RequireSymbols: true,
+    });
   });
 
-  it('does not expose GET /admin/students before Cognito is added', () => {
-    expect(getRouteKeys()).not.toContain('GET /admin/students');
+  it('creates exactly one public app client with minimal auth flows', () => {
+    template.resourceCountIs('AWS::Cognito::UserPoolClient', 1);
+    template.resourceCountIs('AWS::Cognito::UserPoolDomain', 0);
+
+    const [, client] = getSingleResource<UserPoolClientResource>(
+      'AWS::Cognito::UserPoolClient',
+    );
+
+    expect(client.Properties?.GenerateSecret).toBe(false);
+    expect(client.Properties?.ExplicitAuthFlows).toEqual([
+      'ALLOW_USER_SRP_AUTH',
+      'ALLOW_REFRESH_TOKEN_AUTH',
+    ]);
+    expect(client.Properties?.AccessTokenValidity).toBe(30);
+    expect(client.Properties?.TokenValidityUnits).toEqual({
+      AccessToken: 'minutes',
+    });
+    expect(client.Properties?.AllowedOAuthFlowsUserPoolClient).toBe(false);
+    expect(client.Properties?.AllowedOAuthFlows).toBeUndefined();
+    expect(client.Properties?.CallbackURLs).toBeUndefined();
+    expect(client.Properties?.LogoutURLs).toBeUndefined();
   });
 
-  it('exposes the API URL as a stack output', () => {
-    expect(template.findOutputs('*')).toHaveProperty('HttpApiUrl');
+  it('creates the teachers group in the user pool', () => {
+    template.resourceCountIs('AWS::Cognito::UserPoolGroup', 1);
+
+    const [poolLogicalId] = getSingleResource<UserPoolResource>(
+      'AWS::Cognito::UserPool',
+    );
+    const [, group] = getSingleResource<UserPoolGroupResource>(
+      'AWS::Cognito::UserPoolGroup',
+    );
+
+    expect(group.Properties?.GroupName).toBe('teachers');
+    expect(group.Properties?.UserPoolId).toEqual({ Ref: poolLogicalId });
+  });
+
+  it('creates one JWT authorizer for the app client and user pool', () => {
+    template.resourceCountIs('AWS::ApiGatewayV2::Authorizer', 1);
+
+    const [poolLogicalId] = getSingleResource<UserPoolResource>(
+      'AWS::Cognito::UserPool',
+    );
+    const [clientLogicalId] = getSingleResource<UserPoolClientResource>(
+      'AWS::Cognito::UserPoolClient',
+    );
+    const [, authorizer] = getSingleResource<AuthorizerResource>(
+      'AWS::ApiGatewayV2::Authorizer',
+    );
+
+    expect(authorizer.Properties?.AuthorizerType).toBe('JWT');
+    expect(authorizer.Properties?.IdentitySource).toEqual([
+      '$request.header.Authorization',
+    ]);
+    expect(authorizer.Properties?.JwtConfiguration?.Audience).toEqual([
+      { Ref: clientLogicalId },
+    ]);
+    expect(authorizer.Properties?.JwtConfiguration?.Issuer).toEqual({
+      'Fn::Join': [
+        '',
+        [
+          'https://cognito-idp.',
+          { Ref: 'AWS::Region' },
+          '.amazonaws.com/',
+          { Ref: poolLogicalId },
+        ],
+      ],
+    });
+  });
+
+  it('protects both student routes with the JWT authorizer', () => {
+    const [authorizerLogicalId] = getSingleResource<AuthorizerResource>(
+      'AWS::ApiGatewayV2::Authorizer',
+    );
+
+    for (const routeKey of ['GET /admin/students', 'POST /students']) {
+      const route = findRoute(routeKey);
+
+      expect(route.Properties?.AuthorizationType).toBe('JWT');
+      expect(route.Properties?.AuthorizerId).toEqual({
+        Ref: authorizerLogicalId,
+      });
+    }
+  });
+
+  it('keeps GET /health public and exposes no other public routes', () => {
+    expect(getRouteKeys()).toEqual([
+      'GET /admin/students',
+      'GET /health',
+      'POST /students',
+    ]);
+
+    const healthRoute = findRoute('GET /health');
+    expect(healthRoute.Properties?.AuthorizationType ?? 'NONE').toBe('NONE');
+    expect(healthRoute.Properties?.AuthorizerId).toBeUndefined();
+
+    const publicRouteKeys = Object.values(
+      getResources<RouteResource>('AWS::ApiGatewayV2::Route'),
+    )
+      .filter(
+        (route) =>
+          (route.Properties?.AuthorizationType ?? 'NONE') !== 'JWT',
+      )
+      .map((route) => route.Properties?.RouteKey)
+      .filter((routeKey): routeKey is string => typeof routeKey === 'string');
+
+    expect(publicRouteKeys).toEqual(['GET /health']);
+  });
+
+  it('does not grant Cognito permissions to Lambda roles', () => {
+    const actions = Object.values(
+      getResources<IamPolicyResource>('AWS::IAM::Policy'),
+    )
+      .flatMap((policy) => policy.Properties?.PolicyDocument?.Statement ?? [])
+      .flatMap(toActions);
+
+    expect(actions.filter((action) => action.startsWith('cognito'))).toEqual(
+      [],
+    );
+  });
+
+  it('exposes the API URL, user pool ID, and app client ID as stack outputs', () => {
+    const [poolLogicalId] = getSingleResource<UserPoolResource>(
+      'AWS::Cognito::UserPool',
+    );
+    const [clientLogicalId] = getSingleResource<UserPoolClientResource>(
+      'AWS::Cognito::UserPoolClient',
+    );
+    const outputs = template.findOutputs('*');
+
+    expect(Object.keys(outputs).sort()).toEqual([
+      'HttpApiUrl',
+      'UserPoolClientId',
+      'UserPoolId',
+    ]);
+    expect(outputs['UserPoolId']?.Value).toEqual({ Ref: poolLogicalId });
+    expect(outputs['UserPoolClientId']?.Value).toEqual({
+      Ref: clientLogicalId,
+    });
   });
 });
 
