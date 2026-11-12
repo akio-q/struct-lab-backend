@@ -26,6 +26,8 @@ endpoint-ів, полів або поведінки, яких немає в back
 - `GET /admin/students` потребує Cognito **access token**.
 - Студенти не мають Cognito-акаунтів і не входять у систему.
 - Публічного перегляду, редагування або видалення студентів немає.
+- `fullName` і `group` — недовірений текст, який уводить публічний користувач.
+  Рендерте його лише як текст із output encoding; не використовуйте raw HTML.
 
 | Метод | Шлях | Авторизація | Успіх |
 | --- | --- | --- | --- |
@@ -48,6 +50,13 @@ endpoint-ів, полів або поведінки, яких немає в back
 | OAuth / Hosted UI | вимкнено |
 | Access token | 30 хвилин |
 | Група доступу | `teachers` |
+| Username | фактичний username акаунта; email не є alias автоматично |
+
+`Username` для SRP має точно збігатися з username, який адміністратор задав під
+час створення акаунта. У поточній конфігурації User Pool не має
+`UsernameAttributes` або `AliasAttributes`, тому email не стає alias
+автоматично: якщо акаунт створено з username `teacher1`, вхід з email не
+працюватиме.
 
 Оскільки Hosted UI і OAuth вимкнені:
 
@@ -90,12 +99,13 @@ const userPool = new CognitoUserPool({
 });
 
 const cognitoUser = new CognitoUser({
-  Username: email,
+  // username — фактичний username акаунта в Cognito, не обов'язково email.
+  Username: username,
   Pool: userPool,
 });
 
 cognitoUser.authenticateUser(
-  new AuthenticationDetails({ Username: email, Password: password }),
+  new AuthenticationDetails({ Username: username, Password: password }),
   {
     onSuccess: (session) => {
       const accessToken = session.getAccessToken().getJwtToken();
@@ -228,6 +238,12 @@ interface Student {
 `studentId` — UUID v4. `createdAt` — ISO 8601. Цей самий об'єкт зберігається в
 DynamoDB.
 
+**Безпечне відображення.** `fullName` і `group` — це довільний текст, який увів
+публічний користувач. Не вставляйте ці поля через `innerHTML`,
+`dangerouslySetInnerHTML` або інший raw HTML. Використовуйте текстовий
+рендеринг фреймворку або явне escape/output encoding. Інакше можливий stored
+XSS в admin-інтерфейсі викладача.
+
 ### 4.4. Помилки `400`
 
 Відповідь:
@@ -329,6 +345,10 @@ interface ListStudentsResponse {
 - cursor непрозорий: не розбирайте його, не змінюйте і не конструюйте вручну;
 - порядок елементів нестабільний, бо backend використовує DynamoDB `Scan`.
   Не покладайтеся на сортування між сторінками.
+
+**Безпечне відображення.** `fullName` і `group` — недовірений текст. Не
+вставляйте їх через raw HTML; використовуйте текстовий рендеринг і output
+encoding, як описано в розділі 4.3.
 
 ### 5.3. Пагінація
 
@@ -489,6 +509,8 @@ CORS потрібно додати окремою зміною CDK з конкр
 - Не покладатися на стабільне сортування студентів.
 - Не вважати, що backend перевіряє особу студента або унікальність запису.
 - Не розраховувати на публічний список, редагування або видалення студентів.
+- Не рендерити `fullName` або `group` як raw HTML; використовуйте безпечний
+  текстовий рендеринг та output encoding.
 
 ## 9. Чекліст інтеграції
 
@@ -502,3 +524,5 @@ CORS потрібно додати окремою зміною CDK з конкр
 8. Реалізувати admin-таблицю з пагінацією через `nextCursor`.
 9. Обробити `400`, `401`, `403`, `500` і мережеві помилки.
 10. Додати CORS на backend або same-origin proxy до браузерної інтеграції.
+11. Рендерити `fullName` і `group` лише як текст із output encoding; не
+    використовувати raw HTML.

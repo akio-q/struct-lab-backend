@@ -152,6 +152,8 @@ API Gateway.
 | Access token validity | 30 хвилин |
 | Група | `teachers` |
 | User Pool removal policy | `RETAIN` |
+| App Client removal policy | не задано (типова поведінка — видалення) |
+| Група `teachers` removal policy | не задано (типова поведінка — видалення) |
 
 ### 4.1. Обмеження конфігурації
 
@@ -161,7 +163,10 @@ API Gateway.
 - Backend не має власного endpoint для логіну, refresh або logout. Усі токени
   видає Cognito безпосередньо фронтенду.
 - Викладацькі акаунти створюються адміністратором User Pool і додаються до
-  групи `teachers`.
+  групи `teachers`. `Username` під час SRP-логіну має збігатися з фактичним
+  username акаунта; email не є alias автоматично.
+- `RETAIN` застосовано лише до User Pool; App Client і група `teachers` не
+  зберігаються явно. Деталі — у розділі 6.3.
 - Після зміни групи вже виданий access token може зберігати стару інформацію до
   завершення строку дії (до 30 хвилин).
 - Cognito access token не можна відкликати окремо. Вихід із системи на
@@ -174,6 +179,11 @@ API Gateway.
 | `HttpApiUrl` | Базовий URL HTTP API |
 | `UserPoolId` | ID User Pool для конфігурації фронтенду |
 | `UserPoolClientId` | ID публічного App Client |
+
+Після видалення stack і повторного deploy значення `UserPoolId` і
+`UserPoolClientId` можуть змінитися. Не вважайте їх стабільними: новий deploy не
+перевикористовує збережений User Pool автоматично і не відновлює викладацькі
+акаунти в новому pool.
 
 Детальний login-потік і приклад інтеграції:
 [`frontend-integration.md`](frontend-integration.md).
@@ -252,8 +262,16 @@ API Gateway.
 
 ### 6.3. Політики видалення
 
-- Cognito User Pool: `RETAIN` — викладацькі акаунти й група переживають
+- Cognito User Pool: `RETAIN` — сам pool залишається в AWS-акаунті після
   видалення stack.
+- Cognito App Client і група `teachers`: явної політики `RETAIN` немає, тому
+  CloudFormation видаляє їх разом зі stack. Членство в групі та client ID не
+  зберігаються.
+- Повторний deploy не перевикористовує збережений User Pool автоматично:
+  створюються нові Cognito-ресурси. Викладачів треба знову створити в новому
+  User Pool (або явно імпортувати збережений pool) і додати до групи
+  `teachers`, а фронтенд — переналаштувати на нові `UserPoolId` і
+  `UserPoolClientId`.
 - DynamoDB: `DESTROY` — видалення stack знищує всі записи студентів.
 - CDK додає warning annotation для таблиці.
 
@@ -349,5 +367,6 @@ git diff --check
 3. Реалізувати перевірку особи студента та захист від дублікатів.
 4. Розглянути idempotency key для повторних POST-запитів.
 5. Виконати dev-деплой і post-deploy integration-тести.
-6. Посилити production-конфігурацію: MFA, RETAIN, deletion protection, PITR,
-   бекапи, моніторинг та аудит.
+6. Посилити production-конфігурацію: MFA, явний retention lifecycle для
+   Cognito App Client і групи `teachers` (або окремий stateful stack),
+   deletion protection, PITR, бекапи, моніторинг та аудит.

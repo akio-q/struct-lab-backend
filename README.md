@@ -226,7 +226,17 @@ struct-lab-backend/
 | Access token | 30 хвилин |
 | Група | `teachers` |
 | Removal policy User Pool | `RETAIN` |
+| Removal policy App Client | не задано (типова поведінка — видалення) |
+| Removal policy групи `teachers` | не задано (типова поведінка — видалення) |
 | Stack outputs | `UserPoolId`, `UserPoolClientId`, `HttpApiUrl` |
+
+`RETAIN` застосовано лише до User Pool. App Client і група `teachers` не мають
+явної політики збереження, тому під час видалення stack CloudFormation видаляє
+їх. Після видалення stack і повторного deploy створюються нові Cognito-ресурси;
+збережений User Pool не перевикористовується автоматично. Викладачів потрібно
+повторно створити в новому User Pool (або явно імпортувати збережений pool) і
+додати до групи `teachers`, а фронтенд — налаштувати на нові `UserPoolId` і
+`UserPoolClientId`.
 
 JWT authorizer налаштований на:
 
@@ -239,7 +249,9 @@ Lambda приймає лише **access token** (`token_use === "access"`) і в
 `teachers`.
 
 Cognito-акаунти студентів не створюються. Викладачів створює адміністратор
-User Pool, після чого їх додають до групи `teachers`.
+User Pool, після чого їх додають до групи `teachers`. `Username` під час
+SRP-логіну має збігатися з фактичним username акаунта; email не є alias
+автоматично.
 
 Докладніше про login-потік:
 [`docs/frontend-integration.md`](docs/frontend-integration.md#2-автентифікація-викладача).
@@ -441,9 +453,13 @@ JSON-контракту застосунку. Фронтенд має орієн
 - **Обмеження відкликання токенів.** Cognito access token не можна відкликати
   окремо; після виходу, зміни пароля або видалення з групи вже виданий token
   може залишатися дійсним до завершення 30-хвилинного терміну.
-- **Cognito зберігається, DynamoDB видаляється.** User Pool має
-  `RemovalPolicy.RETAIN`; таблиця має `DESTROY` і вимкнений deletion
-  protection. Видалення stack знищить усі записи студентів.
+- **User Pool зберігається, DynamoDB видаляється.** `RETAIN` застосовано лише до
+  Cognito User Pool. App Client і група `teachers` не мають явного `RETAIN`, тому
+  під час видалення stack вони видаляються. Повторний deploy не перевикористовує
+  збережений User Pool автоматично: створюються нові Cognito-ресурси, і
+  викладачів треба знову створити в новому User Pool (або явно імпортувати
+  збережений pool) та додати до групи `teachers`. Таблиця має `DESTROY` і
+  вимкнений deletion protection; видалення stack знищить усі записи студентів.
 - **Деплой не виконувався.** Реальні AWS-ресурси, підписи JWT і робота
   authorizer не перевірені integration-тестами.
 - **Production hardening попереду:** rate limiting/WAF, CORS, identity
@@ -569,5 +585,6 @@ AWS-ключів. Stack не має фіксованих `account`/`region` — 
 2. Додати rate limiting, WAF і CAPTCHA для публічної реєстрації.
 3. Реалізувати перевірку особи студента та захист від дублікатів.
 4. Виконати dev-деплой і post-deploy integration-тести Cognito/API Gateway.
-5. Посилити production-конфігурацію: MFA, RETAIN, deletion protection, PITR,
-   бекапи, моніторинг та аудит.
+5. Посилити production-конфігурацію: MFA, явний retention lifecycle для Cognito
+   App Client і групи `teachers` (або окремий stateful stack), deletion
+   protection, PITR, бекапи, моніторинг та аудит.

@@ -74,7 +74,10 @@ export class StructLabStack extends Stack {
         requireDigits: true,
         requireSymbols: true,
       },
-      // Teacher accounts and group membership must survive a stack removal.
+      // Only the user pool is retained. The app client and teachers group are
+      // not explicitly retained, so removing the stack deletes them. A later
+      // deploy creates new Cognito resources and does not automatically reuse
+      // this pool.
       removalPolicy: RemovalPolicy.RETAIN,
     });
 
