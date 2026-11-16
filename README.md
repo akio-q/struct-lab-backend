@@ -2,12 +2,11 @@
 
 Бекенд навчального вебзастосунку **StructLab** — тренажера структур даних.
 
-Поточна фаза — **Фаза 3**: студенти реєструються через публічний
-`POST /students`, а перегляд студентів доступний лише викладачам через
-`GET /admin/students` із Cognito JWT.
+Поточна фаза — **Фаза 4**: підготовка dev-деплою та посилення безпеки. P4-01
+фіксує цільовий AWS account, region, stack name і resource tags.
 
-> **Статус:** усе реалізовано й перевірено локально. Деплою в AWS, bootstrap і
-> реальних integration-тестів ще не було.
+> **Статус:** P4-01 реалізовано й перевірено локально. Деплою в AWS, bootstrap,
+> `cdk diff` і реальних integration-тестів ще не було.
 
 ## Поточний API
 
@@ -30,6 +29,9 @@
   - JWT authorizer лише для `GET /admin/students`;
   - least-privilege IAM;
   - stack outputs для URL API та Cognito.
+- P4-01: dev-середовище зафіксовано в `lib/environments.ts` — account
+  `677339799150`, region `eu-north-1`, stack `StructLabBackendStack-dev` і теги
+  `Project`, `Service`, `Environment`, `ManagedBy`.
 - Публічний `POST /students`:
   - без Cognito-акаунта, JWT або групи `teachers`;
   - валідація `fullName` і `group`;
@@ -101,6 +103,7 @@ struct-lab-backend/
 ├── bin/
 │   └── app.ts                         # Точка входу CDK-застосунку
 ├── lib/
+│   ├── environments.ts                # Pinned dev account/region, tags, guard
 │   └── struct-lab-stack.ts            # DynamoDB, Cognito, Lambda, IAM, HTTP API
 ├── src/
 │   ├── constants.ts                   # Назва сервісу та група teachers
@@ -129,8 +132,10 @@ struct-lab-backend/
 │   ├── handler-initialization.test.ts # Відсутня STUDENTS_TABLE_NAME
 │   ├── handler-initialization-error.test.ts # Помилка створення repository
 │   ├── auth.test.ts                   # JWT claims і teacher guard
-│   └── struct-lab-stack.test.ts       # CDK: ресурси, IAM, routes, Cognito
+│   ├── environments.test.ts           # Dev config і deployment guard
+│   └── struct-lab-stack.test.ts       # CDK: env, tags, ресурси, IAM, routes
 ├── docs/
+│   ├── deployment.md                  # Dev deployment, safeguards, rollback
 │   ├── phase-2-plan.md                # Історичний план Фази 2
 │   ├── phase-3-plan.md                # Фактична архітектура Фази 3
 │   └── frontend-integration.md        # Контракт для фронтенду
@@ -150,7 +155,8 @@ struct-lab-backend/
 
 | Файл | Для чого потрібен |
 | --- | --- |
-| `bin/app.ts` | Створює CDK-застосунок і додає `StructLabStack`. |
+| `bin/app.ts` | Створює CDK-застосунок, перевіряє target і додає `StructLabStack`. |
+| `lib/environments.ts` | Фіксує dev account/region, stack name, tags і перевіряє розв'язаний AWS target. |
 | `lib/struct-lab-stack.ts` | DynamoDB, Cognito, три Lambda, IAM, HTTP API, authorizer та outputs. |
 | `src/handlers/health.ts` | Повертає стан сервісу для `GET /health`. |
 | `src/handlers/create-student.ts` | Публічно валідовує JSON, генерує UUID і зберігає студента. |
@@ -164,7 +170,9 @@ struct-lab-backend/
 | `src/lib/errors.ts` | Для логів береться лише назва класу помилки, без даних студента. |
 | `test/helpers/events.ts` | Мінімальні API Gateway events для unit-тестів. |
 | `test/auth.test.ts` | Перевіряє malformed claims, ID token, точну групу та відсутність логування при відмові. |
-| `test/struct-lab-stack.test.ts` | Перевіряє DynamoDB, Cognito, IAM, три Lambda та три routes. |
+| `test/environments.test.ts` | Перевіряє pinned dev config і захист від неправильного account/region. |
+| `test/struct-lab-stack.test.ts` | Перевіряє env, tags, DynamoDB, Cognito, IAM, три Lambda та три routes. |
+| `docs/deployment.md` | Dev target, safeguards, локальні команди та майбутній rollback. |
 | `docs/phase-3-plan.md` | Рішення, архітектура, безпека та межі Фази 3. |
 | `docs/frontend-integration.md` | Точний контракт для фронтенду. |
 | `cdk.json` | Каже CDK CLI запускати `bin/app.ts` і складати результат у `cdk.out/`. |
@@ -434,6 +442,10 @@ JSON-контракту застосунку. Фронтенд має орієн
 - **Публічна реєстрація.** `POST /students` навмисно доступний без авторизації.
   Це означає, що будь-хто може створювати записи; rate limiting, WAF, CAPTCHA та
   перевірка особи студента не реалізовані.
+- **Середовище зафіксовано.** `StructLabStack` явно pinned на account
+  `677339799150` і region `eu-north-1`, відхиляє конфліктні `env`/`stackName`, а
+  `bin/app.ts` перевіряє розв'язаний AWS target до синтезу. Це захист від
+  випадкового деплою в інший акаунт або регіон, а не runtime-авторизація.
 - **CORS не налаштований.** Браузерні cross-origin запити до API не працюють,
   доки backend не додасть CORS і preflight-маршрути.
 - **Адмін-доступ захищений двома рівнями:** API Gateway JWT authorizer і Lambda
@@ -512,10 +524,11 @@ pnpm synth
 Очікувані результати:
 
 - `lint` і `typecheck` — без помилок;
-- `test` — **10 тестових файлів, 162 тести пройшли**;
+- `test` — **11 тестових файлів, 173 тести пройшли**;
 - `build` — тека `dist/` з `.js`, `.d.ts` і source maps;
-- `synth` — `cdk.out/StructLabBackendStack.template.json` і попередження про
-  видалення таблиці (це очікувано).
+- `synth` — `cdk.out/StructLabBackendStack.template.json` для стека
+  `StructLabBackendStack-dev` і попередження про видалення таблиці (це
+  очікувано).
 
 ## Тестування
 
@@ -540,22 +553,45 @@ API Gateway event.
   repository завершується помилкою.
 - `test/auth.test.ts` — malformed JWT context, ID token, точна група
   `teachers`, відсутність логування при відмові.
+- `test/environments.test.ts` — pinned dev account/region/stack/tags і
+  deployment guard для неправильного target.
 - `test/health.test.ts` — `GET /health`.
-- `test/struct-lab-stack.test.ts` — DynamoDB, Cognito, три Lambda, IAM, три
-  routes, JWT authorizer, відсутність OAuth/Hosted UI та outputs.
+- `test/struct-lab-stack.test.ts` — env, resource tags, захист від конфліктного
+  target, DynamoDB, Cognito, три Lambda, IAM, три routes, JWT authorizer,
+  відсутність OAuth/Hosted UI та outputs.
+
+## Середовище dev
+
+| Параметр | Значення |
+| --- | --- |
+| AWS account | `677339799150` |
+| AWS region | `eu-north-1` |
+| AWS CLI profile | `structlab-dev` |
+| Environment | `dev` |
+| Stack name | `StructLabBackendStack-dev` |
+| Джерело істини | `lib/environments.ts` |
+
+Stack явно pinned на цей account/region і застосовує теги `Project`,
+`Service`, `Environment` і `ManagedBy`. Деталі, safeguards, локальні команди та
+майбутні кроки деплою: [`docs/deployment.md`](docs/deployment.md).
 
 ## Як працює `cdk synth`
 
 1. CDK CLI читає `cdk.json` і запускає `bin/app.ts` через `ts-node`.
-2. `StructLabStack` створює DynamoDB, Cognito, Lambda, IAM та HTTP API.
-3. `NodejsFunction` збирає кожен обробник через esbuild.
-4. AWS SDK для DynamoDB включається в бандл Lambda, щоб не залежати від версії
+2. `bin/app.ts` перевіряє розв'язаний AWS target через
+   `assertDeploymentTarget()` і передає `DEV_ENVIRONMENT` у стек.
+3. `StructLabStack` фіксує `env`, stack name і resource tags та створює
+   DynamoDB, Cognito, Lambda, IAM і HTTP API.
+4. `NodejsFunction` збирає кожен обробник через esbuild.
+5. AWS SDK для DynamoDB включається в бандл Lambda, щоб не залежати від версії
    SDK у runtime.
-5. CDK формує CloudFormation-шаблон у `cdk.out/`.
+6. CDK формує CloudFormation-шаблон у `cdk.out/`.
 
 `synth` не створює ресурсів в AWS, не завантажує файли в S3 і не потребує
-AWS-ключів. Stack не має фіксованих `account`/`region` — вони визначаться під час
-деплою.
+AWS-ключів. Stack має фіксовані `account`/`region`; без credentials локальний
+`pnpm synth` працює, а якщо CDK CLI розв'язав credentials іншого акаунта або
+регіону, app зупиняється до синтезу. Перевірити назву стека без деплою:
+`pnpm exec cdk ls` → `StructLabBackendStack (StructLabBackendStack-dev)`.
 
 ## Можливі проблеми
 
@@ -566,10 +602,13 @@ AWS-ключів. Stack не має фіксованих `account`/`region` — 
 | `cdk synth` показує WARNING про видалення таблиці | Це навмисне попередження для навчального середовища. |
 | `cdk synth` пише про feature flags | Інформаційне повідомлення, не помилка. |
 | `pnpm synth` не знаходить `ts-node` | Виконати `pnpm install`. |
-| Потрібен деплой | Не входить у Фазу 3. Потрібні AWS-акаунт, credentials, bootstrap і окреме рішення щодо production hardening. |
+| `Refusing to synthesize StructLab dev ...` | Активні credentials вказують на інший account/region. Використайте profile `structlab-dev` або очистіть `CDK_DEFAULT_ACCOUNT`/`CDK_DEFAULT_REGION` для локального synth. |
+| Потрібен деплой | Не входить у P4-01. Див. [`docs/deployment.md`](docs/deployment.md); потрібні AWS CLI/SSO, bootstrap і окреме схвалення. |
 
 ## Документація фаз
 
+- [`docs/deployment.md`](docs/deployment.md) — dev target, environment
+  safeguards, локальні перевірки, майбутній деплой і rollback.
 - [`docs/phase-2-plan.md`](docs/phase-2-plan.md) — історичний план Фази 2:
   DynamoDB, публічний `POST /students`, cursor-based пагінація та підготовка
   admin-обробника.
@@ -581,10 +620,12 @@ AWS-ключів. Stack не має фіксованих `account`/`region` — 
 
 ## Наступні кроки
 
-1. Додати CORS для конкретного домену фронтенду.
-2. Додати rate limiting, WAF і CAPTCHA для публічної реєстрації.
-3. Реалізувати перевірку особи студента та захист від дублікатів.
-4. Виконати dev-деплой і post-deploy integration-тести Cognito/API Gateway.
-5. Посилити production-конфігурацію: MFA, явний retention lifecycle для Cognito
+1. P4-02: налаштувати AWS CLI/SSO, перевірити target і виконати bootstrap після
+   окремого схвалення.
+2. Додати CORS для конкретного домену фронтенду.
+3. Додати rate limiting, WAF і CAPTCHA для публічної реєстрації.
+4. Реалізувати перевірку особи студента та захист від дублікатів.
+5. Виконати dev-деплой і post-deploy integration-тести Cognito/API Gateway.
+6. Посилити production-конфігурацію: MFA, явний retention lifecycle для Cognito
    App Client і групи `teachers` (або окремий stateful stack), deletion
    protection, PITR, бекапи, моніторинг та аудит.

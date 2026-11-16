@@ -6,6 +6,7 @@ import {
   Duration,
   RemovalPolicy,
   Stack,
+  Tags,
 } from 'aws-cdk-lib';
 import type { StackProps } from 'aws-cdk-lib';
 import { HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
@@ -24,6 +25,7 @@ import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { Construct } from 'constructs';
 
 import { TEACHERS_GROUP_NAME } from '../src/constants';
+import type { StructLabEnvironment } from './environments';
 
 const lambdaBundling = {
   minify: true,
@@ -31,6 +33,14 @@ const lambdaBundling = {
   target: 'node22',
   bundleAwsSDK: true,
 } as const;
+
+export interface StructLabStackProps extends StackProps {
+  /**
+   * Pinned deployment target. The stack always derives `env`, `stackName`, and
+   * environment tags from this object.
+   */
+  readonly environment: StructLabEnvironment;
+}
 
 /**
  * Core infrastructure for StructLab:
@@ -40,10 +50,68 @@ const lambdaBundling = {
  * - Lambda for POST /students (public student registration);
  * - Lambda for GET /admin/students (teacher-only JWT);
  * - JWT authorizer protecting the admin student route.
+ *
+ * The AWS account, region, stack name, and environment tags are pinned by the
+ * supplied environment config. Conflicting values are rejected rather than
+ * silently overridden.
  */
 export class StructLabStack extends Stack {
-  constructor(scope: Construct, id: string, props?: StackProps) {
-    super(scope, id, props);
+  constructor(scope: Construct, id: string, props: StructLabStackProps) {
+    const { environment, ...stackProps } = props;
+
+    if (
+      stackProps.env !== undefined &&
+      (stackProps.env.account !== environment.account ||
+        stackProps.env.region !== environment.region)
+    ) {
+      throw new Error(
+        `StructLab ${environment.name} must target ` +
+          `${environment.account}/${environment.region}; received ` +
+          `env ${stackProps.env.account ?? '(unset)'}/` +
+          `${stackProps.env.region ?? '(unset)'}.`,
+      );
+    }
+
+    if (
+      stackProps.stackName !== undefined &&
+      stackProps.stackName !== environment.stackName
+    ) {
+      throw new Error(
+        `StructLab ${environment.name} must use stack name ` +
+          `${environment.stackName}; received ${stackProps.stackName}.`,
+      );
+    }
+
+    super(scope, id, {
+      ...stackProps,
+      env: {
+        account: environment.account,
+        region: environment.region,
+      },
+      stackName: environment.stackName,
+    });
+
+    if (
+      this.account !== environment.account ||
+      this.region !== environment.region ||
+      this.stackName !== environment.stackName
+    ) {
+      throw new Error(
+        `StructLab ${environment.name} resolved to ` +
+          `${this.account}/${this.region}/${this.stackName}; expected ` +
+          `${environment.account}/${environment.region}/` +
+          `${environment.stackName}.`,
+      );
+    }
+
+    // Apply tags explicitly so they are visible on taggable resources in the
+    // synthesized template as well as on the CloudFormation stack.
+    for (const [key, value] of Object.entries({
+      ...stackProps.tags,
+      ...environment.tags,
+    })) {
+      Tags.of(this).add(key, value);
+    }
 
     const studentsTable = new Table(this, 'StudentsTable', {
       partitionKey: {

@@ -2,6 +2,7 @@ import { App } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { DEV_ENVIRONMENT } from '../lib/environments';
 import { StructLabStack } from '../lib/struct-lab-stack';
 
 interface LambdaResource {
@@ -99,16 +100,31 @@ interface AuthorizerResource {
   };
 }
 
+interface TagPair {
+  Key?: string;
+  Value?: string;
+}
+
+interface TaggableResource {
+  Properties?: {
+    Tags?: TagPair[] | Record<string, string>;
+    UserPoolTags?: Record<string, string>;
+  };
+}
+
 const CREATE_DESCRIPTION = 'Creates a student in DynamoDB';
 const LIST_DESCRIPTION =
   'Lists students with cursor-based pagination (teacher-only)';
 
 describe('StructLabStack', () => {
+  let stack: StructLabStack;
   let template: Template;
 
   beforeAll(() => {
     const app = new App();
-    const stack = new StructLabStack(app, 'TestStack');
+    stack = new StructLabStack(app, 'TestStack', {
+      environment: DEV_ENVIRONMENT,
+    });
 
     template = Template.fromStack(stack);
   }, 60_000);
@@ -182,6 +198,75 @@ describe('StructLabStack', () => {
       .map((route) => route.Properties?.RouteKey)
       .filter((routeKey): routeKey is string => typeof routeKey === 'string')
       .sort();
+
+  const getTags = (resource: TaggableResource): Record<string, string> => {
+    const tags = resource.Properties?.Tags;
+
+    if (Array.isArray(tags)) {
+      const result: Record<string, string> = {};
+
+      for (const tag of tags) {
+        if (tag.Key !== undefined) {
+          result[tag.Key] = tag.Value ?? '';
+        }
+      }
+
+      return result;
+    }
+
+    return tags ?? resource.Properties?.UserPoolTags ?? {};
+  };
+
+  it('pins the dev AWS account, region, and stack name', () => {
+    expect(stack.account).toBe('677339799150');
+    expect(stack.region).toBe('eu-north-1');
+    expect(stack.stackName).toBe('StructLabBackendStack-dev');
+  });
+
+  it('applies dev environment tags to taggable resources', () => {
+    for (const type of [
+      'AWS::DynamoDB::Table',
+      'AWS::Cognito::UserPool',
+      'AWS::Lambda::Function',
+      'AWS::ApiGatewayV2::Api',
+      'AWS::ApiGatewayV2::Stage',
+    ]) {
+      const resources = Object.values(getResources<TaggableResource>(type));
+
+      expect(resources.length).toBeGreaterThan(0);
+
+      for (const resource of resources) {
+        expect(getTags(resource)).toMatchObject(DEV_ENVIRONMENT.tags);
+      }
+    }
+  });
+
+  it('rejects a conflicting explicit environment', () => {
+    const app = new App();
+
+    expect(
+      () =>
+        new StructLabStack(app, 'ConflictingEnvironmentStack', {
+          environment: DEV_ENVIRONMENT,
+          env: {
+            account: '123456789012',
+            region: 'us-east-1',
+          },
+        }),
+    ).toThrow(/must target 677339799150\/eu-north-1/);
+  });
+
+  it('rejects a conflicting stack name', () => {
+    const app = new App();
+
+    expect(
+      () =>
+        new StructLabStack(app, 'ConflictingStackNameStack', {
+          environment: DEV_ENVIRONMENT,
+          stackName: 'SomeOtherStack',
+        }),
+    ).toThrow(/must use stack name StructLabBackendStack-dev/);
+  });
 
   it('creates the Students table with on-demand billing and encryption', () => {
     template.resourceCountIs('AWS::DynamoDB::Table', 1);
@@ -348,9 +433,7 @@ describe('StructLabStack', () => {
       'Fn::Join': [
         '',
         [
-          'https://cognito-idp.',
-          { Ref: 'AWS::Region' },
-          '.amazonaws.com/',
+          'https://cognito-idp.eu-north-1.amazonaws.com/',
           { Ref: poolLogicalId },
         ],
       ],
