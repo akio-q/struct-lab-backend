@@ -52,7 +52,8 @@
 
 - Деплою в AWS і post-deploy integration-тестів.
 - Per-IP rate limiting, WAF і CAPTCHA для публічної реєстрації.
-- Lambda reserved concurrency.
+- Lambda reserved і provisioned concurrency (свідоме рішення P4-02.4; див.
+  розділ «Безпека»).
 - CORS для задеплоєного HTTPS-домену фронтенду (зараз дозволений лише
   `http://localhost:3000`).
 - Перевірки особи студента та захисту від дублікатів.
@@ -503,9 +504,32 @@ JSON-контракту застосунку. Фронтенд має орієн
   гарантує hard limit і не є spending cap. Lambda reserved concurrency не
   налаштований. Повторний `POST /students` після `429` може створити дублікат,
   бо idempotency не реалізована.
-- **Throttling не перевірений у AWS.** Локальний synth підтверджує лише
-  конфігурацію. Реальні `429`, поведінка під навантаженням і CORS-заголовки на
-  `429` потребують контрольованої post-deploy перевірки.
+- **Lambda concurrency — спільний account pool.** Станом на P4-02.4
+  `aws lambda get-account-settings` для `eu-north-1` (profile `structlab-dev`,
+  AWS Free Plan) показує `ConcurrentExecutions: 10`,
+  `UnreservedConcurrentExecutions: 10`, `FunctionCount: 0` і
+  `TotalCodeSize: 0`. Це account-specific snapshot, а не постійний ліміт AWS Free
+  Plan: перед деплоєм квоту треба перевірити знову. Усі три Lambda-функції
+  поділяють цей регіональний unreserved pool.
+- **Reserved і provisioned concurrency свідомо не налаштовані.** P4-02.4 не
+  додає reserved concurrency, provisioned concurrency, Lambda versions/aliases
+  або запит на quota increase і не змінює конфігурацію Lambda. Reserved
+  concurrency лише зменшує спільний pool, а provisioned concurrency є платною
+  функцією; для dev достатньо best-effort API Gateway throttling.
+- **Публічна реєстрація може вичерпати pool.** Сплеск `POST /students` здатен
+  зайняти всі 10 unreserved executions, тому `GET /health` та admin-запити
+  тимчасово теж можуть не виконуватися. API Gateway throttling (`10 req/s`,
+  burst `20`) не гарантує concurrency isolation, per-IP fairness або hard
+  spending cap.
+- **Lambda throttling може давати `500`.** Якщо invocation відхилено через
+  вичерпання concurrency, API Gateway може повернути gateway-generated `500`, а
+  не `429`. Така відповідь може не містити CORS-заголовків. Фронтенд має
+  обробляти її як тимчасову помилку й уникати агресивних retry, особливо для
+  `POST /students`, де можливий дублікат.
+- **Throttling і concurrency не перевірені в AWS.** Локальний synth підтверджує
+  лише конфігурацію. Реальні `429`, `500` від Lambda throttling, поведінка під
+  навантаженням і CORS-заголовки потребують контрольованої post-deploy
+  перевірки.
 - **Адмін-доступ захищений двома рівнями:** API Gateway JWT authorizer і Lambda
   teacher guard.
 - **Точна група `teachers`.** Перевірка чутлива до регістру; `Teachers`,
@@ -533,8 +557,8 @@ JSON-контракту застосунку. Фронтенд має орієн
 - **Деплой не виконувався.** Реальні AWS-ресурси, підписи JWT і робота
   authorizer не перевірені integration-тестами.
 - **Production hardening попереду:** per-IP rate limiting, WAF, identity
-  verification, MFA, Lambda reserved concurrency, бекапи, PITR, deletion
-  protection, моніторинг та аудит.
+  verification, MFA, перегляд Lambda concurrency/quota під навантаженням,
+  бекапи, PITR, deletion protection, моніторинг та аудит.
 
 Історичні рішення Фази 2 збережені в
 [`docs/phase-2-plan.md`](docs/phase-2-plan.md). Вони описують попередній стан і
@@ -583,7 +607,7 @@ pnpm synth
 Очікувані результати:
 
 - `lint` і `typecheck` — без помилок;
-- `test` — **12 тестових файлів, 238 тестів пройшли**;
+- `test` — **12 тестових файлів, 239 тестів пройшли**;
 - `build` — тека `dist/` з `.js`, `.d.ts` і source maps;
 - `synth` — `cdk.out/StructLabBackendStack.template.json` для стека
   `StructLabBackendStack-dev` і попередження про видалення таблиці (це
@@ -627,8 +651,8 @@ API Gateway event.
   native CORS (`AllowOrigins`, `AllowMethods`, `AllowHeaders`, `MaxAge`,
   `AllowCredentials`), throttle на існуючому default stage (rate 10, burst 20,
   `$default`, `AutoDeploy`, незмінний logical ID), відсутність
-  route-specific overrides і Lambda reserved concurrency, відсутність
-  OAuth/Hosted UI, відсутність `OPTIONS`-route та outputs.
+  route-specific overrides, Lambda reserved і provisioned concurrency
+  (versions/aliases), відсутність OAuth/Hosted UI, `OPTIONS`-route та outputs.
 
 ## Середовище dev
 
@@ -696,10 +720,11 @@ AWS-ключів. Stack має фіксовані `account`/`region`; без cre
    окремого схвалення.
 2. Додати HTTPS-origin задеплоєного фронтенду в `corsAllowedOrigins`.
 3. Додати per-IP rate limiting, WAF і CAPTCHA для публічної реєстрації.
-4. Налаштувати Lambda reserved concurrency після окремого рішення.
+4. Перед деплоєм повторно перевірити Lambda account quotas; reserved і
+   provisioned concurrency свідомо не налаштовувати (рішення P4-02.4).
 5. Реалізувати перевірку особи студента та захист від дублікатів.
 6. Виконати dev-деплой і post-deploy integration-тести Cognito/API Gateway,
-   включно з throttling `429`.
+   включно з throttling `429` і контрольованим вичерпанням Lambda concurrency.
 7. Посилити production-конфігурацію: MFA, явний retention lifecycle для Cognito
    App Client і групи `teachers` (або окремий stateful stack), deletion
    protection, PITR, бекапи, моніторинг та аудит.

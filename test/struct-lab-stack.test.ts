@@ -559,6 +559,11 @@ describe('StructLabStack', () => {
     }
   });
 
+  it('does not create Lambda versions or aliases for provisioned concurrency', () => {
+    template.resourceCountIs('AWS::Lambda::Version', 0);
+    template.resourceCountIs('AWS::Lambda::Alias', 0);
+  });
+
   it('does not grant Cognito permissions to Lambda roles', () => {
     const actions = Object.values(
       getResources<IamPolicyResource>('AWS::IAM::Policy'),

@@ -1,8 +1,9 @@
 # Dev deployment: environment pinning and safeguards
 
-**Статус:** P4-01, P4-02.2 і P4-02.3 реалізовано локально. Жодного AWS
-API-виклику, `cdk bootstrap`, `cdk diff`, `cdk deploy` або `cdk destroy` не
-виконувалося. AWS-ресурсів ще не створено.
+**Статус:** P4-01, P4-02.2, P4-02.3 і P4-02.4 реалізовано локально. У межах
+цих задач жодного AWS API-виклику, `cdk bootstrap`, `cdk diff`, `cdk deploy` або
+`cdk destroy` не виконувалося; AWS-ресурсів ще не створено. Quota snapshot у
+розділі 5 отриманий вручну поза цим workflow.
 
 Цей документ описує зафіксоване dev-середовище, локальні перевірки та безпечні
 кроки для майбутнього деплою. Він не є дозволом виконувати деплой: кожен
@@ -58,6 +59,9 @@ AWS-крок потребує окремого ручного схвалення
 9. **Throttling.** `bin/app.ts` викликає `assertValidThrottling()` до синтезу.
    Значення зберігаються в `DEV_ENVIRONMENT.throttling`; невалідні rate/burst
    відхиляються. Деталі — в розділі 4.
+10. **Concurrency decision.** P4-02.4 не додає reserved або provisioned
+    concurrency, Lambda versions/aliases чи quota increase і не змінює
+    конфігурацію Lambda. Деталі та quota snapshot — в розділі 5.
 
 ## 3. CORS
 
@@ -122,7 +126,81 @@ Throttling не є гарантованим hard limit, WAF або spending cap.
 concurrency не налаштований. Повторний `POST /students` після `429` може
 створити дублікат, бо idempotency не реалізована.
 
-## 5. Локальні перевірки без AWS
+## 5. Lambda concurrency і quota awareness
+
+### 5.1. Фактичні account quotas
+
+Спостережено вручну через `aws lambda get-account-settings` (profile
+`structlab-dev`, region `eu-north-1`, AWS Free Plan):
+
+| Параметр | Значення |
+| --- | --- |
+| `ConcurrentExecutions` | `10` |
+| `UnreservedConcurrentExecutions` | `10` |
+| `FunctionCount` | `0` |
+| `TotalCodeSize` | `0` |
+
+Це account-specific snapshot на момент P4-02.4, а не постійний ліміт AWS Free
+Plan. AWS може змінити квоту; перед деплоєм її треба перевірити знову.
+
+### 5.2. Рішення
+
+- Reserved concurrency не налаштовується.
+- Provisioned concurrency не налаштовується.
+- Quota increase не запитується.
+- Існуюча конфігурація Lambda не змінюється.
+- API Gateway throttling залишається `10 req/s`, burst `20`.
+- Акаунт залишається на AWS Free Plan.
+
+Reserved concurrency лише зменшує спільний unreserved pool і не створює
+додаткової ізоляції між клієнтами; provisioned concurrency є платною функцією.
+Для dev достатньо best-effort API Gateway throttling, тому інфраструктура в
+P4-02.4 не змінювалася.
+
+### 5.3. Спільний pool і наслідки
+
+Усі три Lambda-функції (`GET /health`, `POST /students`,
+`GET /admin/students`) використовують один регіональний unreserved pool.
+Сплеск публічних `POST /students` може вичерпати всі 10 executions; тоді інші
+маршрути тимчасово не виконуватимуться.
+
+API Gateway throttling обмежує швидкість запитів на stage, але не гарантує
+concurrency isolation, per-IP fairness або hard spending cap. Якщо Lambda
+відхиляє invocation через throttling, API Gateway може повернути
+gateway-generated `500` замість `429`. Така відповідь може не містити
+CORS-заголовків, тому браузер може показати мережеву помилку.
+
+Повторний `POST /students` після `500`, `429` або таймауту може створити
+дублікат: idempotency не реалізована. Фронтенд має уникати агресивних retry і
+повторювати `POST` лише після підтвердження користувача.
+
+### 5.4. Перевірка перед деплоєм
+
+```bash
+aws lambda get-account-settings \
+  --profile structlab-dev \
+  --region eu-north-1
+```
+
+Зафіксуйте `ConcurrentExecutions` і `UnreservedConcurrentExecutions`. Якщо вони
+відрізняються від snapshot, оновіть документацію і перегляньте ризик
+вичерпання pool. Не запитуйте quota increase без окремого схвалення.
+
+### 5.5. Контрольована post-deploy перевірка
+
+Після окремо схваленого деплою в dev:
+
+- переконатися, що звичайні запити до всіх трьох маршрутів працюють;
+- під контрольованим навантаженням перевірити поведінку при вичерпанні
+  concurrency (паралельні запити до `/health` і `POST /students`);
+- зафіксувати фактичні статуси: `429` від API Gateway throttling і/або `500`
+  від Lambda throttling;
+- перевірити CORS-заголовки на цих відповідях;
+- не спрямовувати тест на production і не перевищувати dev-квоту.
+
+Тут ця перевірка **не виконувалася**.
+
+## 6. Локальні перевірки без AWS
 
 Виконуйте з кореня репозиторію:
 
@@ -150,6 +228,9 @@ pnpm synth
 - `AWS::ApiGatewayV2::Stage` (`$default`, `AutoDeploy: true`, незмінний logical
   ID) з `DefaultRouteSettings`: `ThrottlingRateLimit: 10`,
   `ThrottlingBurstLimit: 20`;
+- відсутність `ReservedConcurrentExecutions` у всіх `AWS::Lambda::Function`;
+- відсутність `AWS::Lambda::Version` і `AWS::Lambda::Alias` (provisioned
+  concurrency не налаштована);
 - попередження CDK про `RemovalPolicy.DESTROY` для DynamoDB (очікувано для
   навчального середовища);
 - повідомлення про незадані feature flags (інформаційне).
@@ -179,10 +260,10 @@ pnpm synth
 
 Не вимикайте перевірку в коді, щоб обійти це обмеження.
 
-## 6. Майбутні кроки деплою (не виконано в P4-01, P4-02.2 або P4-02.3)
+## 7. Майбутні кроки деплою (не виконано в P4-01, P4-02.2, P4-02.3 або P4-02.4)
 
 Наведені команди призначені для наступних задач Фази 4 після окремого
-схвалення. P4-01, P4-02.2 і P4-02.3 їх **не виконували**.
+схвалення. P4-01, P4-02.2, P4-02.3 і P4-02.4 їх **не виконували**.
 
 1. Встановити/налаштувати AWS CLI v2 і profile `structlab-dev` з регіоном
    `eu-north-1`.
@@ -195,25 +276,36 @@ pnpm synth
 
    Очікуваний account — `677339799150`, регіон — `eu-north-1`.
 
-3. Виконати bootstrap (P4-02, окреме схвалення):
+3. Повторно перевірити Lambda account quotas (розділ 5.4):
+
+   ```bash
+   aws lambda get-account-settings \
+     --profile structlab-dev \
+     --region eu-north-1
+   ```
+
+   Не запитувати quota increase без окремого схвалення. Якщо значення
+   відрізняються від snapshot, оновити документацію перед деплоєм.
+
+4. Виконати bootstrap (P4-02, окреме схвалення):
 
    ```bash
    pnpm exec cdk bootstrap aws://677339799150/eu-north-1 --profile structlab-dev
    ```
 
-4. Переглянути diff перед деплоєм (окреме схвалення):
+5. Переглянути diff перед деплоєм (окреме схвалення):
 
    ```bash
    pnpm exec cdk diff --profile structlab-dev
    ```
 
-5. Виконати деплой (окреме схвалення):
+6. Виконати деплой (окреме схвалення):
 
    ```bash
    pnpm exec cdk deploy --profile structlab-dev
    ```
 
-6. Перевірити CORS preflight після деплою (окреме схвалення; тут не
+7. Перевірити CORS preflight після деплою (окреме схвалення; тут не
    виконувалося):
 
    ```bash
@@ -228,12 +320,13 @@ pnpm synth
    містить `content-type`, `access-control-max-age: 300`. Запит з origin поза
    allowlist не повинен отримувати `access-control-allow-origin`.
 
-7. Перевірити gateway-generated помилки. `401`/`403` для `/admin/students` і
-   `429` мають повертати CORS-заголовки для дозволеного origin. Якщо їх немає,
-   браузер покаже мережеву помилку замість статусу; це потребує окремого
-   рішення в наступних підзадачах.
+8. Перевірити gateway-generated помилки. `401`/`403` для `/admin/students`,
+   `429` від API Gateway throttling і `500` від Lambda throttling мають
+   повертати CORS-заголовки для дозволеного origin. Якщо їх немає, браузер
+   покаже мережеву помилку замість статусу; це потребує окремого рішення в
+   наступних підзадачах.
 
-8. Перевірити throttling під контрольованим навантаженням (окреме схвалення;
+9. Перевірити throttling під контрольованим навантаженням (окреме схвалення;
    тут не виконувалося):
 
    ```bash
@@ -247,7 +340,15 @@ pnpm synth
    від таймінгу та account-level limits. Перевірку виконувати лише в dev і не
    спрямовувати на production.
 
-## 7. Відкат і видалення
+10. Перевірити вичерпання Lambda concurrency (окреме схвалення; тут не
+    виконувалося). Використати контрольовану кількість паралельних запитів до
+    `/health` і `POST /students`, не перевищуючи dev-квоту, та зафіксувати
+    фактичні статуси. Очікувано: або `429` від API Gateway throttling, або
+    gateway-generated `500` від Lambda throttling; обидва варіанти є
+    best-effort. Перевірити CORS-заголовки і не спрямовувати тест на
+    production.
+
+## 8. Відкат і видалення
 
 - Невдале створення/оновлення CloudFormation зазвичай відкочується автоматично.
   Перевіряйте події стека в AWS Console або через CDK CLI.
@@ -261,11 +362,14 @@ pnpm synth
 - Не запускайте `cdk destroy` на середовищі, де є дані, без окремого
   runbook і схвалення.
 
-## 8. Межі P4-01, P4-02.2 і P4-02.3
+## 9. Межі P4-01, P4-02.2, P4-02.3 і P4-02.4
 
 P4-01 не додає throttling, WAF, budgets, alarms, PITR, deletion protection, MFA
 або інші задачі Фази 4. P4-02.2 додає native CORS для `http://localhost:3000`.
-P4-02.3 додає best-effort throttling на default stage (`10 req/s`, burst `20`)
-і не додає per-IP rate limiting, WAF, CAPTCHA, Lambda reserved concurrency або
-CORS для задеплоєного HTTPS-домену. Поточні API-маршрути, Lambda handlers,
-DynamoDB schema, Cognito authorization behavior та IAM не змінювалися.
+P4-02.3 додає best-effort throttling на default stage (`10 req/s`, burst `20`).
+P4-02.4 додає лише документацію та regression-тест: reserved і provisioned
+concurrency не налаштовані, quota increase не запитується, Lambda
+configuration не змінюється. Жодна з цих задач не додає per-IP rate limiting,
+WAF, CAPTCHA або CORS для задеплоєного HTTPS-домену. Поточні API-маршрути,
+Lambda handlers, DynamoDB schema, Cognito authorization behavior та IAM не
+змінювалися.
