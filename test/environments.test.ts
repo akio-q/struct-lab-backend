@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assertDeploymentTarget,
   assertValidCorsOrigins,
+  assertValidThrottling,
   DEV_ENVIRONMENT,
 } from '../lib/environments';
 
@@ -12,7 +13,7 @@ const DEV_PROCESS_ENV: NodeJS.ProcessEnv = {
 };
 
 describe('dev environment configuration', () => {
-  it('pins the intended account, region, stack name, tags, and CORS allowlist', () => {
+  it('pins the intended account, region, stack name, tags, CORS, and throttling', () => {
     expect(DEV_ENVIRONMENT).toEqual({
       name: 'dev',
       account: '677339799150',
@@ -25,6 +26,10 @@ describe('dev environment configuration', () => {
         ManagedBy: 'AWS CDK',
       },
       corsAllowedOrigins: ['http://localhost:3000'],
+      throttling: {
+        rateLimitPerSecond: 10,
+        burstLimit: 20,
+      },
     });
   });
 
@@ -168,4 +173,43 @@ describe('CORS origin validation', () => {
       assertValidCorsOrigins(['HTTPS://STRUCT-LAB.EXAMPLE.COM']),
     ).toThrow(/canonical lowercase form/);
   });
+});
+
+describe('throttling validation', () => {
+  it('accepts the approved throttling settings', () => {
+    expect(DEV_ENVIRONMENT.throttling).toEqual({
+      rateLimitPerSecond: 10,
+      burstLimit: 20,
+    });
+    expect(() =>
+      assertValidThrottling(DEV_ENVIRONMENT.throttling),
+    ).not.toThrow();
+  });
+
+  it('accepts a positive fractional rate with an integer burst', () => {
+    expect(() =>
+      assertValidThrottling({ rateLimitPerSecond: 0.5, burstLimit: 1 }),
+    ).not.toThrow();
+  });
+
+  it.each([
+    0,
+    -1,
+    Number.NaN,
+    Number.NEGATIVE_INFINITY,
+    Number.POSITIVE_INFINITY,
+  ])('rejects invalid rate limit %j', (rateLimitPerSecond) => {
+    expect(() =>
+      assertValidThrottling({ rateLimitPerSecond, burstLimit: 20 }),
+    ).toThrow(/Throttling rate limit must be a positive finite number/);
+  });
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects invalid burst limit %j',
+    (burstLimit) => {
+      expect(() =>
+        assertValidThrottling({ rateLimitPerSecond: 10, burstLimit }),
+      ).toThrow(/Throttling burst limit must be a positive integer/);
+    },
+  );
 });

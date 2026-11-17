@@ -11,6 +11,7 @@ interface LambdaResource {
     Runtime?: string;
     Handler?: string;
     MemorySize?: number;
+    ReservedConcurrentExecutions?: number;
     Environment?: {
       Variables?: Record<string, unknown>;
     };
@@ -109,6 +110,18 @@ interface HttpApiResource {
       AllowOrigins?: string[];
       MaxAge?: number;
     };
+  };
+}
+
+interface StageResource {
+  Properties?: {
+    StageName?: string;
+    AutoDeploy?: boolean;
+    DefaultRouteSettings?: {
+      ThrottlingBurstLimit?: number;
+      ThrottlingRateLimit?: number;
+    };
+    RouteSettings?: unknown;
   };
 }
 
@@ -515,6 +528,35 @@ describe('StructLabStack', () => {
     expect(
       getRouteKeys().filter((routeKey) => routeKey.startsWith('OPTIONS ')),
     ).toEqual([]);
+  });
+
+  it('applies throttling to the existing default stage', () => {
+    template.resourceCountIs('AWS::ApiGatewayV2::Stage', 1);
+
+    const [stageLogicalId, stage] = getSingleResource<StageResource>(
+      'AWS::ApiGatewayV2::Stage',
+    );
+
+    expect(stageLogicalId).toBe('HttpApiDefaultStage3EEB07D6');
+    expect(stage.Properties?.StageName).toBe('$default');
+    expect(stage.Properties?.AutoDeploy).toBe(true);
+    expect(stage.Properties?.DefaultRouteSettings).toEqual({
+      ThrottlingBurstLimit: 20,
+      ThrottlingRateLimit: 10,
+    });
+    expect(stage.Properties?.RouteSettings).toBeUndefined();
+  });
+
+  it('does not configure Lambda reserved concurrency', () => {
+    const lambdas = Object.values(
+      getResources<LambdaResource>('AWS::Lambda::Function'),
+    );
+
+    expect(lambdas).toHaveLength(3);
+
+    for (const lambda of lambdas) {
+      expect(lambda.Properties?.ReservedConcurrentExecutions).toBeUndefined();
+    }
   });
 
   it('does not grant Cognito permissions to Lambda roles', () => {

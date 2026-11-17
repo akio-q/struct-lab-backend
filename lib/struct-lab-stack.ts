@@ -10,6 +10,7 @@ import {
 } from 'aws-cdk-lib';
 import type { StackProps } from 'aws-cdk-lib';
 import {
+  CfnStage,
   CorsHttpMethod,
   HttpApi,
   HttpMethod,
@@ -243,6 +244,32 @@ export class StructLabStack extends Stack {
         maxAge: Duration.seconds(300),
       },
     });
+
+    // Throttling belongs on the existing default stage. Use the L1 escape
+    // hatch instead of creating a new stage so the construct identity and
+    // CloudFormation logical ID stay unchanged.
+    const defaultStage = httpApi.defaultStage;
+
+    if (defaultStage === undefined) {
+      throw new Error(
+        'StructLab HTTP API default stage was not created; ' +
+          'cannot apply throttling.',
+      );
+    }
+
+    const cfnDefaultStage = defaultStage.node.defaultChild;
+
+    if (!(cfnDefaultStage instanceof CfnStage)) {
+      throw new Error(
+        'StructLab HTTP API default stage is not an ' +
+          'AWS::ApiGatewayV2::Stage; cannot apply throttling.',
+      );
+    }
+
+    cfnDefaultStage.defaultRouteSettings = {
+      throttlingRateLimit: environment.throttling.rateLimitPerSecond,
+      throttlingBurstLimit: environment.throttling.burstLimit,
+    };
 
     const teachersAuthorizer = new HttpUserPoolAuthorizer(
       'TeachersJwtAuthorizer',

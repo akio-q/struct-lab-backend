@@ -1,8 +1,8 @@
 # Dev deployment: environment pinning and safeguards
 
-**Статус:** P4-01 і P4-02.2 реалізовано локально. Жодного AWS API-виклику,
-`cdk bootstrap`, `cdk diff`, `cdk deploy` або `cdk destroy` не виконувалося.
-AWS-ресурсів ще не створено.
+**Статус:** P4-01, P4-02.2 і P4-02.3 реалізовано локально. Жодного AWS
+API-виклику, `cdk bootstrap`, `cdk diff`, `cdk deploy` або `cdk destroy` не
+виконувалося. AWS-ресурсів ще не створено.
 
 Цей документ описує зафіксоване dev-середовище, локальні перевірки та безпечні
 кроки для майбутнього деплою. Він не є дозволом виконувати деплой: кожен
@@ -55,6 +55,9 @@ AWS-крок потребує окремого ручного схвалення
 8. **CORS allowlist.** `bin/app.ts` викликає `assertValidCorsOrigins()` до
    синтезу. Список origin зберігається в `DEV_ENVIRONMENT.corsAllowedOrigins`;
    wildcards та неканонічні origins відхиляються. Деталі — в розділі 3.
+9. **Throttling.** `bin/app.ts` викликає `assertValidThrottling()` до синтезу.
+   Значення зберігаються в `DEV_ENVIRONMENT.throttling`; невалідні rate/burst
+   відхиляються. Деталі — в розділі 4.
 
 ## 3. CORS
 
@@ -93,7 +96,33 @@ CORS не є автентифікацією, rate limiting, WAF або anti-spam
 Відповіді `401`, `403` і `429`, які API Gateway генерує до виклику Lambda, можуть
 не містити CORS-заголовків; це перевіряється після деплою.
 
-## 4. Локальні перевірки без AWS
+## 4. Throttling
+
+Throttling застосований до існуючого default stage `$default` через
+`DefaultRouteSettings`. Stage не перестворюється: використовується L1 escape
+hatch (`CfnStage`), тому construct identity і CloudFormation logical ID
+зберігаються.
+
+| Параметр | Значення |
+| --- | --- |
+| Rate limit | `10` requests per second |
+| Burst limit | `20` |
+| Stage | `$default` |
+| `AutoDeploy` | `true` |
+| Route-specific overrides | немає |
+| Перевищення | `429 Too Many Requests` |
+
+Джерело істини — `DEV_ENVIRONMENT.throttling` у `lib/environments.ts`.
+`bin/app.ts` викликає `assertValidThrottling()` до синтезу: rate має бути
+positive finite number, burst — positive integer.
+
+Це best-effort обмеження на рівні stage, а не per-IP або per-user quota. Усі
+клієнти поділяють один ліміт, тому один клієнт може вичерпати burst для інших.
+Throttling не є гарантованим hard limit, WAF або spending cap. Lambda reserved
+concurrency не налаштований. Повторний `POST /students` після `429` може
+створити дублікат, бо idempotency не реалізована.
+
+## 5. Локальні перевірки без AWS
 
 Виконуйте з кореня репозиторію:
 
@@ -118,6 +147,9 @@ pnpm synth
 - `CorsConfiguration` у `AWS::ApiGatewayV2::Api` з origin
   `http://localhost:3000`, методами `GET`/`POST`, headers
   `content-type`/`authorization`, `AllowCredentials: false`, `MaxAge: 300`;
+- `AWS::ApiGatewayV2::Stage` (`$default`, `AutoDeploy: true`, незмінний logical
+  ID) з `DefaultRouteSettings`: `ThrottlingRateLimit: 10`,
+  `ThrottlingBurstLimit: 20`;
 - попередження CDK про `RemovalPolicy.DESTROY` для DynamoDB (очікувано для
   навчального середовища);
 - повідомлення про незадані feature flags (інформаційне).
@@ -147,10 +179,10 @@ pnpm synth
 
 Не вимикайте перевірку в коді, щоб обійти це обмеження.
 
-## 5. Майбутні кроки деплою (не виконано в P4-01 або P4-02.2)
+## 6. Майбутні кроки деплою (не виконано в P4-01, P4-02.2 або P4-02.3)
 
 Наведені команди призначені для наступних задач Фази 4 після окремого
-схвалення. P4-01 і P4-02.2 їх **не виконували**.
+схвалення. P4-01, P4-02.2 і P4-02.3 їх **не виконували**.
 
 1. Встановити/налаштувати AWS CLI v2 і profile `structlab-dev` з регіоном
    `eu-north-1`.
@@ -197,11 +229,25 @@ pnpm synth
    allowlist не повинен отримувати `access-control-allow-origin`.
 
 7. Перевірити gateway-generated помилки. `401`/`403` для `/admin/students` і
-   `429` (за наявності throttling) мають повертати CORS-заголовки для
-   дозволеного origin. Якщо їх немає, браузер покаже мережеву помилку замість
-   статусу; це потребує окремого рішення в наступних підзадачах.
+   `429` мають повертати CORS-заголовки для дозволеного origin. Якщо їх немає,
+   браузер покаже мережеву помилку замість статусу; це потребує окремого
+   рішення в наступних підзадачах.
 
-## 6. Відкат і видалення
+8. Перевірити throttling під контрольованим навантаженням (окреме схвалення;
+   тут не виконувалося):
+
+   ```bash
+   for i in $(seq 1 50); do
+     curl -s -o /dev/null -w "%{http_code}\n" "<HttpApiUrl>/health"
+   done | sort | uniq -c
+   ```
+
+   Очікувано: частина запитів отримує `429 Too Many Requests` після
+   вичерпання burst 20. Результат best-effort: точна кількість `429` залежить
+   від таймінгу та account-level limits. Перевірку виконувати лише в dev і не
+   спрямовувати на production.
+
+## 7. Відкат і видалення
 
 - Невдале створення/оновлення CloudFormation зазвичай відкочується автоматично.
   Перевіряйте події стека в AWS Console або через CDK CLI.
@@ -215,10 +261,11 @@ pnpm synth
 - Не запускайте `cdk destroy` на середовищі, де є дані, без окремого
   runbook і схвалення.
 
-## 7. Межі P4-01 і P4-02.2
+## 8. Межі P4-01, P4-02.2 і P4-02.3
 
 P4-01 не додає throttling, WAF, budgets, alarms, PITR, deletion protection, MFA
-або інші задачі Фази 4. P4-02.2 додає лише native CORS для
-`http://localhost:3000`; throttling, Lambda reserved concurrency і CORS для
-задеплоєного HTTPS-домену не реалізовані. Поточні API-маршрути, Lambda handlers,
+або інші задачі Фази 4. P4-02.2 додає native CORS для `http://localhost:3000`.
+P4-02.3 додає best-effort throttling на default stage (`10 req/s`, burst `20`)
+і не додає per-IP rate limiting, WAF, CAPTCHA, Lambda reserved concurrency або
+CORS для задеплоєного HTTPS-домену. Поточні API-маршрути, Lambda handlers,
 DynamoDB schema, Cognito authorization behavior та IAM не змінювалися.

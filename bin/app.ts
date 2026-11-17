@@ -4,12 +4,14 @@ import { App } from 'aws-cdk-lib';
 import {
   assertDeploymentTarget,
   assertValidCorsOrigins,
+  assertValidThrottling,
   DEV_ENVIRONMENT,
 } from '../lib/environments';
 import { StructLabStack } from '../lib/struct-lab-stack';
 
 assertDeploymentTarget(DEV_ENVIRONMENT);
 assertValidCorsOrigins(DEV_ENVIRONMENT.corsAllowedOrigins);
+assertValidThrottling(DEV_ENVIRONMENT.throttling);
 
 const app = new App();
 

@@ -51,7 +51,8 @@
 ## Чого ще немає
 
 - Деплою в AWS і post-deploy integration-тестів.
-- Rate limiting, WAF і CAPTCHA для публічної реєстрації.
+- Per-IP rate limiting, WAF і CAPTCHA для публічної реєстрації.
+- Lambda reserved concurrency.
 - CORS для задеплоєного HTTPS-домену фронтенду (зараз дозволений лише
   `http://localhost:3000`).
 - Перевірки особи студента та захисту від дублікатів.
@@ -98,8 +99,9 @@ Cognito User Pool
 - **Application-level request hardening:** `POST /students` вимагає
   `Content-Type: application/json` і обмежує decoded body до 4096 байт.
   Це не edge-level захист і не захист від спаму.
-- **Rate limiting** поки не налаштований. **CORS** дозволяє лише
-  `http://localhost:3000` для локального Next.js; preflight обробляє API Gateway.
+- **Throttling** налаштований на default stage: 10 req/s і burst 20. Це
+  best-effort, не per-IP quota. **CORS** дозволяє лише `http://localhost:3000`
+  для локального Next.js; preflight обробляє API Gateway.
 
 ## Структура проєкту
 
@@ -108,8 +110,8 @@ struct-lab-backend/
 ├── bin/
 │   └── app.ts                         # Точка входу CDK-застосунку
 ├── lib/
-│   ├── environments.ts                # Pinned dev target, tags, CORS allowlist
-│   └── struct-lab-stack.ts            # DynamoDB, Cognito, Lambda, IAM, HTTP API/CORS
+│   ├── environments.ts                # Pinned dev target, tags, CORS, throttling
+│   └── struct-lab-stack.ts            # DynamoDB, Cognito, Lambda, IAM, API/CORS/throttling
 ├── src/
 │   ├── constants.ts                   # Назва сервісу та група teachers
 │   ├── handlers/
@@ -138,8 +140,8 @@ struct-lab-backend/
 │   ├── handler-initialization.test.ts # Відсутня STUDENTS_TABLE_NAME
 │   ├── handler-initialization-error.test.ts # Помилка створення repository
 │   ├── auth.test.ts                   # JWT claims і teacher guard
-│   ├── environments.test.ts           # Dev config, deployment guard, CORS origins
-│   └── struct-lab-stack.test.ts       # CDK: env, tags, ресурси, IAM, routes, CORS
+│   ├── environments.test.ts           # Dev config, guard, CORS, throttling
+│   └── struct-lab-stack.test.ts       # CDK: env, tags, IAM, routes, CORS, throttling
 ├── docs/
 │   ├── deployment.md                  # Dev deployment, safeguards, rollback
 │   ├── phase-2-plan.md                # Історичний план Фази 2
@@ -465,8 +467,8 @@ JSON-контракту застосунку. Фронтенд має орієн
 ## Безпека
 
 - **Публічна реєстрація.** `POST /students` навмисно доступний без авторизації.
-  Це означає, що будь-хто може створювати записи; rate limiting, WAF, CAPTCHA та
-  перевірка особи студента не реалізовані.
+  Це означає, що будь-хто може створювати записи; per-IP rate limiting, WAF,
+  CAPTCHA та перевірка особи студента не реалізовані.
 - **Application-level request hardening.** `POST /students` вимагає
   `Content-Type: application/json` (з опційним `charset=utf-8`) і приймає не
   більше 4096 decoded bytes. Перевірки виконуються до JSON parsing і запису в
@@ -494,6 +496,16 @@ JSON-контракту застосунку. Фронтенд має орієн
 - **CORS для gateway-помилок.** Відповіді `401`/`403`/`429`, згенеровані API
   Gateway до виклику Lambda, можуть не містити CORS-заголовків. Це потребує
   post-deploy перевірки; локальні тести цього не підтверджують.
+- **API Gateway throttling.** Default stage `$default` має
+  `DefaultRouteSettings` з rate **10 req/s** і burst **20**. Перевищення
+  повертає `429 Too Many Requests`. Це best-effort обмеження на рівні stage, а не
+  per-IP або per-user quota: один клієнт може вичерпати спільний burst. Воно не
+  гарантує hard limit і не є spending cap. Lambda reserved concurrency не
+  налаштований. Повторний `POST /students` після `429` може створити дублікат,
+  бо idempotency не реалізована.
+- **Throttling не перевірений у AWS.** Локальний synth підтверджує лише
+  конфігурацію. Реальні `429`, поведінка під навантаженням і CORS-заголовки на
+  `429` потребують контрольованої post-deploy перевірки.
 - **Адмін-доступ захищений двома рівнями:** API Gateway JWT authorizer і Lambda
   teacher guard.
 - **Точна група `teachers`.** Перевірка чутлива до регістру; `Teachers`,
@@ -520,8 +532,9 @@ JSON-контракту застосунку. Фронтенд має орієн
   вимкнений deletion protection; видалення stack знищить усі записи студентів.
 - **Деплой не виконувався.** Реальні AWS-ресурси, підписи JWT і робота
   authorizer не перевірені integration-тестами.
-- **Production hardening попереду:** rate limiting/WAF, identity
-  verification, MFA, бекапи, PITR, deletion protection, моніторинг та аудит.
+- **Production hardening попереду:** per-IP rate limiting, WAF, identity
+  verification, MFA, Lambda reserved concurrency, бекапи, PITR, deletion
+  protection, моніторинг та аудит.
 
 Історичні рішення Фази 2 збережені в
 [`docs/phase-2-plan.md`](docs/phase-2-plan.md). Вони описують попередній стан і
@@ -570,7 +583,7 @@ pnpm synth
 Очікувані результати:
 
 - `lint` і `typecheck` — без помилок;
-- `test` — **12 тестових файлів, 224 тести пройшли**;
+- `test` — **12 тестових файлів, 238 тестів пройшли**;
 - `build` — тека `dist/` з `.js`, `.d.ts` і source maps;
 - `synth` — `cdk.out/StructLabBackendStack.template.json` для стека
   `StructLabBackendStack-dev` і попередження про видалення таблиці (це
@@ -606,13 +619,16 @@ API Gateway event.
 - `test/environments.test.ts` — pinned dev account/region/stack/tags, CORS
   allowlist і валідація origin (wildcard, path, query, fragment, credentials,
   дублікати, HTTP поза localhost), відсутність credentials у повідомленнях,
+  throttling (10 req/s, burst 20) і відхилення невалідних rate/burst,
   deployment guard для неправильного target.
 - `test/health.test.ts` — `GET /health`.
 - `test/struct-lab-stack.test.ts` — env, resource tags, захист від конфліктного
   target, DynamoDB, Cognito, три Lambda, IAM, три routes, JWT authorizer,
   native CORS (`AllowOrigins`, `AllowMethods`, `AllowHeaders`, `MaxAge`,
-  `AllowCredentials`), відсутність OAuth/Hosted UI, відсутність `OPTIONS`-route
-  та outputs.
+  `AllowCredentials`), throttle на існуючому default stage (rate 10, burst 20,
+  `$default`, `AutoDeploy`, незмінний logical ID), відсутність
+  route-specific overrides і Lambda reserved concurrency, відсутність
+  OAuth/Hosted UI, відсутність `OPTIONS`-route та outputs.
 
 ## Середовище dev
 
@@ -633,10 +649,11 @@ Stack явно pinned на цей account/region і застосовує тег�
 
 1. CDK CLI читає `cdk.json` і запускає `bin/app.ts` через `ts-node`.
 2. `bin/app.ts` перевіряє розв'язаний AWS target через
-   `assertDeploymentTarget()` і CORS allowlist через `assertValidCorsOrigins()`,
-   після чого передає `DEV_ENVIRONMENT` у стек.
+   `assertDeploymentTarget()`, CORS allowlist через `assertValidCorsOrigins()` і
+   throttling через `assertValidThrottling()`, після чого передає
+   `DEV_ENVIRONMENT` у стек.
 3. `StructLabStack` фіксує `env`, stack name і resource tags та створює
-   DynamoDB, Cognito, Lambda, IAM і HTTP API.
+   DynamoDB, Cognito, Lambda, IAM і HTTP API з CORS і throttling.
 4. `NodejsFunction` збирає кожен обробник через esbuild.
 5. AWS SDK для DynamoDB включається в бандл Lambda, щоб не залежати від версії
    SDK у runtime.
@@ -658,7 +675,7 @@ AWS-ключів. Stack має фіксовані `account`/`region`; без cre
 | `cdk synth` пише про feature flags | Інформаційне повідомлення, не помилка. |
 | `pnpm synth` не знаходить `ts-node` | Виконати `pnpm install`. |
 | `Refusing to synthesize StructLab dev ...` | Активні credentials вказують на інший account/region. Використайте profile `structlab-dev` або очистіть `CDK_DEFAULT_ACCOUNT`/`CDK_DEFAULT_REGION` для локального synth. |
-| Потрібен деплой | Не входить у P4-01. Див. [`docs/deployment.md`](docs/deployment.md); потрібні AWS CLI/SSO, bootstrap і окреме схвалення. |
+| Потрібен деплой | Не входить у P4-02.3. Див. [`docs/deployment.md`](docs/deployment.md); потрібні AWS CLI/SSO, bootstrap і окреме схвалення. |
 
 ## Документація фаз
 
@@ -670,17 +687,19 @@ AWS-ключів. Stack має фіксовані `account`/`region`; без cre
 - [`docs/phase-3-plan.md`](docs/phase-3-plan.md) — фактична архітектура Фази 3:
   Cognito, JWT authorizer, teacher guard, публічна реєстрація та security review.
 - [`docs/frontend-integration.md`](docs/frontend-integration.md) — точний
-  контракт для фронтенду: запити, відповіді, помилки, пагінація, SRP-логін і
-  CORS.
+  контракт для фронтенду: запити, відповіді, помилки, пагінація, SRP-логін,
+  CORS і throttling.
 
 ## Наступні кроки
 
 1. P4-02: налаштувати AWS CLI/SSO, перевірити target і виконати bootstrap після
    окремого схвалення.
 2. Додати HTTPS-origin задеплоєного фронтенду в `corsAllowedOrigins`.
-3. Додати rate limiting, WAF і CAPTCHA для публічної реєстрації.
-4. Реалізувати перевірку особи студента та захист від дублікатів.
-5. Виконати dev-деплой і post-deploy integration-тести Cognito/API Gateway.
-6. Посилити production-конфігурацію: MFA, явний retention lifecycle для Cognito
+3. Додати per-IP rate limiting, WAF і CAPTCHA для публічної реєстрації.
+4. Налаштувати Lambda reserved concurrency після окремого рішення.
+5. Реалізувати перевірку особи студента та захист від дублікатів.
+6. Виконати dev-деплой і post-deploy integration-тести Cognito/API Gateway,
+   включно з throttling `429`.
+7. Посилити production-конфігурацію: MFA, явний retention lifecycle для Cognito
    App Client і групи `teachers` (або окремий stateful stack), deletion
    protection, PITR, бекапи, моніторинг та аудит.

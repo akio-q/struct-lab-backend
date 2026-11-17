@@ -8,6 +8,13 @@
  */
 export type EnvironmentName = 'dev';
 
+export interface ThrottlingConfiguration {
+  /** Steady-state request rate per second for the API Gateway stage. */
+  readonly rateLimitPerSecond: number;
+  /** Maximum burst the stage token bucket can hold. Must be an integer. */
+  readonly burstLimit: number;
+}
+
 export interface StructLabEnvironment {
   readonly name: EnvironmentName;
   readonly account: string;
@@ -20,6 +27,12 @@ export interface StructLabEnvironment {
    * use HTTPS. Validated by `assertValidCorsOrigins` before synthesis.
    */
   readonly corsAllowedOrigins: readonly string[];
+  /**
+   * Best-effort API Gateway stage throttling. This is not a per-IP or per-user
+   * quota and does not guarantee a spending cap. Validated by
+   * `assertValidThrottling` before synthesis.
+   */
+  readonly throttling: ThrottlingConfiguration;
 }
 
 export const DEV_ENVIRONMENT: StructLabEnvironment = {
@@ -34,6 +47,10 @@ export const DEV_ENVIRONMENT: StructLabEnvironment = {
     ManagedBy: 'AWS CDK',
   },
   corsAllowedOrigins: ['http://localhost:3000'],
+  throttling: {
+    rateLimitPerSecond: 10,
+    burstLimit: 20,
+  },
 };
 
 const ALLOWED_CORS_PROTOCOLS = new Set(['http:', 'https:']);
@@ -114,6 +131,32 @@ export const assertValidCorsOrigins = (
     }
 
     seen.add(normalized);
+  }
+};
+
+/**
+ * Validates API Gateway stage throttling before synthesis.
+ *
+ * The rate must be a positive finite number because API Gateway accepts
+ * fractional steady-state rates. The burst limit must be a positive integer.
+ */
+export const assertValidThrottling = (
+  throttling: ThrottlingConfiguration,
+): void => {
+  if (
+    !Number.isFinite(throttling.rateLimitPerSecond) ||
+    throttling.rateLimitPerSecond <= 0
+  ) {
+    throw new Error(
+      'Throttling rate limit must be a positive finite number.',
+    );
+  }
+
+  if (
+    !Number.isInteger(throttling.burstLimit) ||
+    throttling.burstLimit <= 0
+  ) {
+    throw new Error('Throttling burst limit must be a positive integer.');
   }
 };
 
