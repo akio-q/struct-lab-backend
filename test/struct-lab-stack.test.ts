@@ -100,6 +100,18 @@ interface AuthorizerResource {
   };
 }
 
+interface HttpApiResource {
+  Properties?: {
+    CorsConfiguration?: {
+      AllowCredentials?: boolean;
+      AllowHeaders?: string[];
+      AllowMethods?: string[];
+      AllowOrigins?: string[];
+      MaxAge?: number;
+    };
+  };
+}
+
 interface TagPair {
   Key?: string;
   Value?: string;
@@ -478,6 +490,31 @@ describe('StructLabStack', () => {
       .sort();
 
     expect(publicRouteKeys).toEqual(['GET /health', 'POST /students']);
+  });
+
+  it('configures native CORS for the approved Next.js dev origin', () => {
+    template.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
+
+    const [, api] = getSingleResource<HttpApiResource>(
+      'AWS::ApiGatewayV2::Api',
+    );
+
+    expect(api.Properties?.CorsConfiguration).toEqual({
+      AllowCredentials: false,
+      AllowHeaders: ['content-type', 'authorization'],
+      AllowMethods: ['GET', 'POST'],
+      AllowOrigins: ['http://localhost:3000'],
+      MaxAge: 300,
+    });
+    expect(api.Properties?.CorsConfiguration?.AllowOrigins).toEqual([
+      ...DEV_ENVIRONMENT.corsAllowedOrigins,
+    ]);
+  });
+
+  it('does not add an explicit OPTIONS preflight route', () => {
+    expect(
+      getRouteKeys().filter((routeKey) => routeKey.startsWith('OPTIONS ')),
+    ).toEqual([]);
   });
 
   it('does not grant Cognito permissions to Lambda roles', () => {

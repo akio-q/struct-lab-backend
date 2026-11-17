@@ -52,7 +52,8 @@
 
 - Деплою в AWS і post-deploy integration-тестів.
 - Rate limiting, WAF і CAPTCHA для публічної реєстрації.
-- CORS для фронтенду.
+- CORS для задеплоєного HTTPS-домену фронтенду (зараз дозволений лише
+  `http://localhost:3000`).
 - Перевірки особи студента та захисту від дублікатів.
 - Production hardening: MFA, deletion protection, бекапи, PITR, аудит.
 - Пагінації по 5000 записів — вимога ще не підтверджена.
@@ -97,7 +98,8 @@ Cognito User Pool
 - **Application-level request hardening:** `POST /students` вимагає
   `Content-Type: application/json` і обмежує decoded body до 4096 байт.
   Це не edge-level захист і не захист від спаму.
-- **Rate limiting і CORS** поки не налаштовані.
+- **Rate limiting** поки не налаштований. **CORS** дозволяє лише
+  `http://localhost:3000` для локального Next.js; preflight обробляє API Gateway.
 
 ## Структура проєкту
 
@@ -106,8 +108,8 @@ struct-lab-backend/
 ├── bin/
 │   └── app.ts                         # Точка входу CDK-застосунку
 ├── lib/
-│   ├── environments.ts                # Pinned dev account/region, tags, guard
-│   └── struct-lab-stack.ts            # DynamoDB, Cognito, Lambda, IAM, HTTP API
+│   ├── environments.ts                # Pinned dev target, tags, CORS allowlist
+│   └── struct-lab-stack.ts            # DynamoDB, Cognito, Lambda, IAM, HTTP API/CORS
 ├── src/
 │   ├── constants.ts                   # Назва сервісу та група teachers
 │   ├── handlers/
@@ -136,8 +138,8 @@ struct-lab-backend/
 │   ├── handler-initialization.test.ts # Відсутня STUDENTS_TABLE_NAME
 │   ├── handler-initialization-error.test.ts # Помилка створення repository
 │   ├── auth.test.ts                   # JWT claims і teacher guard
-│   ├── environments.test.ts           # Dev config і deployment guard
-│   └── struct-lab-stack.test.ts       # CDK: env, tags, ресурси, IAM, routes
+│   ├── environments.test.ts           # Dev config, deployment guard, CORS origins
+│   └── struct-lab-stack.test.ts       # CDK: env, tags, ресурси, IAM, routes, CORS
 ├── docs/
 │   ├── deployment.md                  # Dev deployment, safeguards, rollback
 │   ├── phase-2-plan.md                # Історичний план Фази 2
@@ -475,8 +477,23 @@ JSON-контракту застосунку. Фронтенд має орієн
   `677339799150` і region `eu-north-1`, відхиляє конфліктні `env`/`stackName`, а
   `bin/app.ts` перевіряє розв'язаний AWS target до синтезу. Це захист від
   випадкового деплою в інший акаунт або регіон, а не runtime-авторизація.
-- **CORS не налаштований.** Браузерні cross-origin запити до API не працюють,
-  доки backend не додасть CORS і preflight-маршрути.
+- **CORS налаштований для локального Next.js.** API Gateway має native CORS:
+  точний origin `http://localhost:3000`, методи `GET` і `POST`, headers
+  `content-type` і `authorization`, `MaxAge` 300 секунд,
+  `AllowCredentials: false`. Wildcards, шляхи, query strings, fragments,
+  credentials і trailing slashes відхиляються до синтезу
+  (`assertValidCorsOrigins`); повідомлення про помилки не містять значення
+  origin. Preflight `OPTIONS` обробляє API Gateway; окремого
+  маршруту або Lambda-заголовків немає.
+- **CORS — не авторизація.** Дозволений origin не дає прав на admin-маршрут:
+  `GET /admin/students` усе одно вимагає Cognito access token. CORS також не є
+  rate limiting, WAF або захистом від спаму.
+- **Майбутній домен фронтенду.** Для задеплоєного Next.js треба додати його
+  точний HTTPS origin у `DEV_ENVIRONMENT.corsAllowedOrigins`, перевірити локально
+  і задеплоїти. Wildcard заборонений.
+- **CORS для gateway-помилок.** Відповіді `401`/`403`/`429`, згенеровані API
+  Gateway до виклику Lambda, можуть не містити CORS-заголовків. Це потребує
+  post-deploy перевірки; локальні тести цього не підтверджують.
 - **Адмін-доступ захищений двома рівнями:** API Gateway JWT authorizer і Lambda
   teacher guard.
 - **Точна група `teachers`.** Перевірка чутлива до регістру; `Teachers`,
@@ -503,7 +520,7 @@ JSON-контракту застосунку. Фронтенд має орієн
   вимкнений deletion protection; видалення stack знищить усі записи студентів.
 - **Деплой не виконувався.** Реальні AWS-ресурси, підписи JWT і робота
   authorizer не перевірені integration-тестами.
-- **Production hardening попереду:** rate limiting/WAF, CORS, identity
+- **Production hardening попереду:** rate limiting/WAF, identity
   verification, MFA, бекапи, PITR, deletion protection, моніторинг та аудит.
 
 Історичні рішення Фази 2 збережені в
@@ -553,7 +570,7 @@ pnpm synth
 Очікувані результати:
 
 - `lint` і `typecheck` — без помилок;
-- `test` — **12 тестових файлів, 205 тестів пройшли**;
+- `test` — **12 тестових файлів, 224 тести пройшли**;
 - `build` — тека `dist/` з `.js`, `.d.ts` і source maps;
 - `synth` — `cdk.out/StructLabBackendStack.template.json` для стека
   `StructLabBackendStack-dev` і попередження про видалення таблиці (це
@@ -586,12 +603,16 @@ API Gateway event.
   repository завершується помилкою.
 - `test/auth.test.ts` — malformed JWT context, ID token, точна група
   `teachers`, відсутність логування при відмові.
-- `test/environments.test.ts` — pinned dev account/region/stack/tags і
+- `test/environments.test.ts` — pinned dev account/region/stack/tags, CORS
+  allowlist і валідація origin (wildcard, path, query, fragment, credentials,
+  дублікати, HTTP поза localhost), відсутність credentials у повідомленнях,
   deployment guard для неправильного target.
 - `test/health.test.ts` — `GET /health`.
 - `test/struct-lab-stack.test.ts` — env, resource tags, захист від конфліктного
   target, DynamoDB, Cognito, три Lambda, IAM, три routes, JWT authorizer,
-  відсутність OAuth/Hosted UI та outputs.
+  native CORS (`AllowOrigins`, `AllowMethods`, `AllowHeaders`, `MaxAge`,
+  `AllowCredentials`), відсутність OAuth/Hosted UI, відсутність `OPTIONS`-route
+  та outputs.
 
 ## Середовище dev
 
@@ -612,7 +633,8 @@ Stack явно pinned на цей account/region і застосовує тег�
 
 1. CDK CLI читає `cdk.json` і запускає `bin/app.ts` через `ts-node`.
 2. `bin/app.ts` перевіряє розв'язаний AWS target через
-   `assertDeploymentTarget()` і передає `DEV_ENVIRONMENT` у стек.
+   `assertDeploymentTarget()` і CORS allowlist через `assertValidCorsOrigins()`,
+   після чого передає `DEV_ENVIRONMENT` у стек.
 3. `StructLabStack` фіксує `env`, stack name і resource tags та створює
    DynamoDB, Cognito, Lambda, IAM і HTTP API.
 4. `NodejsFunction` збирає кожен обробник через esbuild.
@@ -649,13 +671,13 @@ AWS-ключів. Stack має фіксовані `account`/`region`; без cre
   Cognito, JWT authorizer, teacher guard, публічна реєстрація та security review.
 - [`docs/frontend-integration.md`](docs/frontend-integration.md) — точний
   контракт для фронтенду: запити, відповіді, помилки, пагінація, SRP-логін і
-  обмеження CORS.
+  CORS.
 
 ## Наступні кроки
 
 1. P4-02: налаштувати AWS CLI/SSO, перевірити target і виконати bootstrap після
    окремого схвалення.
-2. Додати CORS для конкретного домену фронтенду.
+2. Додати HTTPS-origin задеплоєного фронтенду в `corsAllowedOrigins`.
 3. Додати rate limiting, WAF і CAPTCHA для публічної реєстрації.
 4. Реалізувати перевірку особи студента та захист від дублікатів.
 5. Виконати dev-деплой і post-deploy integration-тести Cognito/API Gateway.

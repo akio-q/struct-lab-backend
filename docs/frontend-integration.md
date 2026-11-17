@@ -1,8 +1,9 @@
 # Frontend Integration Contract
 
-**Статус:** контракт відповідає реалізованому backend Фази 3. AWS-деплой ще не
-виконувався, тому реальної базової URL-адреси поки немає. Після деплою її треба
-взяти зі stack output `HttpApiUrl`.
+**Статус:** контракт відповідає реалізованому backend (Фаза 3, P4-02.1
+request hardening і P4-02.2 CORS). AWS-деплой ще не виконувався, тому реальної
+базової URL-адреси поки немає. Після деплою її треба взяти зі stack output
+`HttpApiUrl`.
 
 Цей документ описує лише те, що реально реалізовано в коді. Він не додає
 endpoint-ів, полів або поведінки, яких немає в backend.
@@ -16,6 +17,11 @@ endpoint-ів, полів або поведінки, яких немає в back
 - Для запитів із тілом надсилайте `Content-Type: application/json`.
   `POST /students` приймає щонайбільше 4096 decoded bytes; інакше — `413` або
   `415`.
+- Cross-origin запити дозволені лише з `http://localhost:3000` (локальний
+  Next.js). Preflight обробляє API Gateway; див. розділ 7.
+- Для admin-запитів передавайте access token у
+  `Authorization: Bearer <accessToken>`. Cross-origin cookies не
+  використовуються.
 - Прикладні помилки мають форму:
 
 ```json
@@ -519,25 +525,58 @@ Access token валідний, але не містить точної груп�
 Для `POST /students` не робіть автоматичний retry після таймауту без окремого
 рішення щодо ідемпотентності.
 
-## 7. CORS: поточне обмеження
+## 7. CORS
 
-**CORS у backend не налаштований.** У CDK немає CORS-конфігурації для HTTP API і
-немає окремого `OPTIONS`-маршруту.
+CORS налаштований нативно на API Gateway HTTP API. Окремого `OPTIONS`-маршруту
+немає, Lambda не додає CORS-заголовків: preflight обробляє API Gateway до
+виклику інтеграції.
 
-Наслідки для браузера:
+| Параметр | Значення |
+| --- | --- |
+| Дозволені origins | `http://localhost:3000` |
+| Дозволені методи | `GET`, `POST` |
+| Дозволені headers | `content-type`, `authorization` |
+| `AllowCredentials` | `false` |
+| `MaxAge` | `300` секунд |
+| Wildcards | заборонені |
 
-- cross-origin запит із фронтенду на інший домен буде заблокований браузером;
-- `POST /students` із `Content-Type: application/json` потребує preflight;
-- `GET /admin/students` із заголовком `Authorization` також потребує preflight;
-- відповіді не містять `Access-Control-Allow-Origin`;
-- `OPTIONS`-запит не буде оброблений API-контрактом.
+`Authorization: Bearer <accessToken>` передається явно в заголовку. Cross-origin
+cookies не використовуються і не підтримуються, бо `AllowCredentials: false`.
+Origin перевіряється точно: схема, host і port мають збігатися.
 
-До додавання CORS у backend можливі лише варіанти з однаковим origin, наприклад
-через dev-proxy або reverse proxy, який обслуговує і фронтенд, і API. Не
-вимикайте перевірки безпеки браузера як обхідний шлях.
+### 7.1. Локальна розробка Next.js
 
-CORS потрібно додати окремою зміною CDK з конкретним origin фронтенду; у Фазі 3
-це не реалізовано.
+Запускайте Next.js на `http://localhost:3000` (`pnpm dev`). Цей origin уже
+дозволений, тому окремий dev-proxy не потрібен.
+
+`POST /students` із `Content-Type: application/json` і `GET /admin/students` із
+`Authorization` викликають браузерний preflight. Браузер робить його
+автоматично; не надсилайте `OPTIONS` вручну і не додавайте CORS-заголовки в
+Next.js.
+
+Якщо port 3000 зайнятий і Next.js обрав інший port, цей origin не буде
+дозволений. Звільніть port або додайте точний новий origin у
+`DEV_ENVIRONMENT.corsAllowedOrigins` (`lib/environments.ts`) і виконайте
+локальні перевірки та новий деплой. Wildcard використовувати не можна.
+
+### 7.2. Майбутній задеплоєний фронтенд
+
+Коли з'явиться HTTPS-домен фронтенду, додайте його точний origin, наприклад
+`https://struct-lab.example.com`, у `DEV_ENVIRONMENT.corsAllowedOrigins`.
+Валідатор дозволяє HTTPS для будь-якого host, але відхиляє trailing slash, шлях,
+query string, fragment, credentials, дублікати і wildcards. Зміна потребує
+нового синтезу й деплою; до цього вона не діє.
+
+### 7.3. Межі CORS
+
+- CORS — не автентифікація. `GET /admin/students` усе одно вимагає Cognito
+  access token і групу `teachers`.
+- CORS — не rate limiting, не WAF і не захист від спаму. Він лише обмежує
+  браузерні cross-origin запити.
+- CORS виконується браузером. Серверні клієнти та curl його ігнорують.
+- Відповіді `401`, `403` і `429`, які API Gateway генерує до виклику Lambda,
+  можуть не містити CORS-заголовків. Це треба перевірити після деплою; локальні
+  тести та синтез цього не підтверджують.
 
 ## 8. Що фронтенд не повинен робити
 
@@ -548,7 +587,12 @@ CORS потрібно додати окремою зміною CDK з конкр
   обов'язковий `application/json`.
 - Не надсилати тіло більше 4096 decoded bytes і не розраховувати на цей ліміт
   як на anti-spam або edge-level захист.
-- Не намагатися викликати `/students` з іншого origin до налаштування CORS.
+- Не викликати API з origin, відмінного від `http://localhost:3000` (локально)
+  або явно доданого HTTPS-origin (після деплою).
+- Не покладатися на cross-origin cookies; передавайте access token у
+  `Authorization`.
+- Не додавати власні CORS-заголовки або `OPTIONS`-обробник: preflight уже
+  обробляє API Gateway.
 - Не розбирати та не модифікувати `nextCursor`.
 - Не покладатися на стабільне сортування студентів.
 - Не вважати, що backend перевіряє особу студента або унікальність запису.
@@ -568,6 +612,7 @@ CORS потрібно додати окремою зміною CDK з конкр
    `Content-Type: application/json` і тілом до 4096 байт.
 8. Реалізувати admin-таблицю з пагінацією через `nextCursor`.
 9. Обробити `400`, `401`, `403`, `413`, `415`, `500` і мережеві помилки.
-10. Додати CORS на backend або same-origin proxy до браузерної інтеграції.
+10. Перевірити, що Next.js працює на `http://localhost:3000` і preflight до
+    `/students` та `/admin/students` проходить (CORS уже налаштований).
 11. Рендерити `fullName` і `group` лише як текст із output encoding; не
     використовувати raw HTML.

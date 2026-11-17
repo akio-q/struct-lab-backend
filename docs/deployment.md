@@ -1,8 +1,8 @@
 # Dev deployment: environment pinning and safeguards
 
-**Статус:** P4-01 реалізовано локально. Жодного AWS API-виклику, `cdk bootstrap`,
-`cdk diff`, `cdk deploy` або `cdk destroy` не виконувалося. AWS-ресурсів ще не
-створено.
+**Статус:** P4-01 і P4-02.2 реалізовано локально. Жодного AWS API-виклику,
+`cdk bootstrap`, `cdk diff`, `cdk deploy` або `cdk destroy` не виконувалося.
+AWS-ресурсів ще не створено.
 
 Цей документ описує зафіксоване dev-середовище, локальні перевірки та безпечні
 кроки для майбутнього деплою. Він не є дозволом виконувати деплой: кожен
@@ -52,8 +52,48 @@ AWS-крок потребує окремого ручного схвалення
 7. **Секрети.** У репозиторії немає access keys, паролів або тимчасових
    credentials. Для деплою використовуйте AWS CLI profile `structlab-dev` або
    SSO; не додавайте ключі у файли проєкту.
+8. **CORS allowlist.** `bin/app.ts` викликає `assertValidCorsOrigins()` до
+   синтезу. Список origin зберігається в `DEV_ENVIRONMENT.corsAllowedOrigins`;
+   wildcards та неканонічні origins відхиляються. Деталі — в розділі 3.
 
-## 3. Локальні перевірки без AWS
+## 3. CORS
+
+CORS налаштований нативно на API Gateway HTTP API (`corsPreflight` у
+`lib/struct-lab-stack.ts`). Окремого `OPTIONS`-маршруту та Lambda-заголовків
+немає: preflight обробляє API Gateway.
+
+| Параметр | Значення |
+| --- | --- |
+| Дозволені origins | `http://localhost:3000` |
+| Дозволені методи | `GET`, `POST` |
+| Дозволені headers | `content-type`, `authorization` |
+| `AllowCredentials` | `false` |
+| `MaxAge` | `300` секунд |
+| Wildcards | заборонені |
+
+Джерело істини — `DEV_ENVIRONMENT.corsAllowedOrigins` у `lib/environments.ts`.
+Валідатор відхиляє порожній список, дублікати, wildcards, trailing slashes,
+paths, query strings, fragments, credentials, не-HTTP(S) схеми, HTTP поза
+`localhost` і неканонічні origins (наприклад, uppercase host або default port).
+Повідомлення про помилки не містять значення origin, щоб випадково не
+розкрити embedded credentials.
+
+Next.js локально працює на `http://localhost:3000`, тому dev-proxy не потрібен.
+Браузер сам виконує preflight для `POST /students` і для `GET /admin/students` із
+`Authorization`. Access token передається як `Authorization: Bearer ...`;
+cross-origin cookies не використовуються (`AllowCredentials: false`).
+
+Майбутній HTTPS-origin фронтенду додається точним рядком у
+`corsAllowedOrigins`, наприклад `https://struct-lab.example.com`. Після зміни
+потрібні нові локальні перевірки та окремо схвалений деплой; wildcard
+використовувати не можна.
+
+CORS не є автентифікацією, rate limiting, WAF або anti-spam захистом.
+`GET /admin/students` усе одно вимагає Cognito access token і групу `teachers`.
+Відповіді `401`, `403` і `429`, які API Gateway генерує до виклику Lambda, можуть
+не містити CORS-заголовків; це перевіряється після деплою.
+
+## 4. Локальні перевірки без AWS
 
 Виконуйте з кореня репозиторію:
 
@@ -75,6 +115,9 @@ pnpm synth
 Очікуваний результат:
 
 - `cdk.out/StructLabBackendStack.template.json`;
+- `CorsConfiguration` у `AWS::ApiGatewayV2::Api` з origin
+  `http://localhost:3000`, методами `GET`/`POST`, headers
+  `content-type`/`authorization`, `AllowCredentials: false`, `MaxAge: 300`;
 - попередження CDK про `RemovalPolicy.DESTROY` для DynamoDB (очікувано для
   навчального середовища);
 - повідомлення про незадані feature flags (інформаційне).
@@ -104,10 +147,10 @@ pnpm synth
 
 Не вимикайте перевірку в коді, щоб обійти це обмеження.
 
-## 4. Майбутні кроки деплою (не виконано в P4-01)
+## 5. Майбутні кроки деплою (не виконано в P4-01 або P4-02.2)
 
 Наведені команди призначені для наступних задач Фази 4 після окремого
-схвалення. P4-01 їх **не виконував**.
+схвалення. P4-01 і P4-02.2 їх **не виконували**.
 
 1. Встановити/налаштувати AWS CLI v2 і profile `structlab-dev` з регіоном
    `eu-north-1`.
@@ -138,7 +181,27 @@ pnpm synth
    pnpm exec cdk deploy --profile structlab-dev
    ```
 
-## 5. Відкат і видалення
+6. Перевірити CORS preflight після деплою (окреме схвалення; тут не
+   виконувалося):
+
+   ```bash
+   curl -i -X OPTIONS "<HttpApiUrl>/students" \
+     -H "Origin: http://localhost:3000" \
+     -H "Access-Control-Request-Method: POST" \
+     -H "Access-Control-Request-Headers: content-type"
+   ```
+
+   Очікувано: `204` і `access-control-allow-origin: http://localhost:3000`,
+   `access-control-allow-methods` містить `POST`, `access-control-allow-headers`
+   містить `content-type`, `access-control-max-age: 300`. Запит з origin поза
+   allowlist не повинен отримувати `access-control-allow-origin`.
+
+7. Перевірити gateway-generated помилки. `401`/`403` для `/admin/students` і
+   `429` (за наявності throttling) мають повертати CORS-заголовки для
+   дозволеного origin. Якщо їх немає, браузер покаже мережеву помилку замість
+   статусу; це потребує окремого рішення в наступних підзадачах.
+
+## 6. Відкат і видалення
 
 - Невдале створення/оновлення CloudFormation зазвичай відкочується автоматично.
   Перевіряйте події стека в AWS Console або через CDK CLI.
@@ -152,8 +215,10 @@ pnpm synth
 - Не запускайте `cdk destroy` на середовищі, де є дані, без окремого
   runbook і схвалення.
 
-## 6. Межі P4-01
+## 7. Межі P4-01 і P4-02.2
 
-P4-01 не додає CORS, throttling, WAF, budgets, alarms, PITR, deletion
-protection, MFA або інші задачі Фази 4. Поточні API-маршрути, Lambda handlers,
-DynamoDB schema і Cognito authorization behavior не змінювалися.
+P4-01 не додає throttling, WAF, budgets, alarms, PITR, deletion protection, MFA
+або інші задачі Фази 4. P4-02.2 додає лише native CORS для
+`http://localhost:3000`; throttling, Lambda reserved concurrency і CORS для
+задеплоєного HTTPS-домену не реалізовані. Поточні API-маршрути, Lambda handlers,
+DynamoDB schema, Cognito authorization behavior та IAM не змінювалися.

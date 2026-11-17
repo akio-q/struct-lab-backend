@@ -9,7 +9,11 @@ import {
   Tags,
 } from 'aws-cdk-lib';
 import type { StackProps } from 'aws-cdk-lib';
-import { HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
+import {
+  CorsHttpMethod,
+  HttpApi,
+  HttpMethod,
+} from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpUserPoolAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { UserPool } from 'aws-cdk-lib/aws-cognito';
@@ -228,6 +232,16 @@ export class StructLabStack extends Stack {
     const httpApi = new HttpApi(this, 'HttpApi', {
       apiName: 'struct-lab-http-api',
       description: 'HTTP API for the StructLab backend',
+      // API Gateway answers preflight requests natively; no OPTIONS route or
+      // Lambda-level CORS headers are needed. Origins are validated before
+      // synthesis and matched exactly (never wildcarded).
+      corsPreflight: {
+        allowOrigins: [...environment.corsAllowedOrigins],
+        allowMethods: [CorsHttpMethod.GET, CorsHttpMethod.POST],
+        allowHeaders: ['content-type', 'authorization'],
+        allowCredentials: false,
+        maxAge: Duration.seconds(300),
+      },
     });
 
     const teachersAuthorizer = new HttpUserPoolAuthorizer(
