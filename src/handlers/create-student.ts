@@ -1,12 +1,20 @@
 import { randomUUID } from 'node:crypto';
 
 import { getErrorName } from '../lib/errors';
-import { jsonResponse } from '../lib/http';
+import {
+  getHeader,
+  isJsonContentType,
+  jsonResponse,
+  readRequestBody,
+} from '../lib/http';
 import type { HttpHandler } from '../lib/http';
 import { createDynamoDbStudentsRepository } from '../students/repository';
 import type { StudentsRepository } from '../students/repository';
 import type { Student } from '../students/types';
-import { parseCreateStudentInput } from '../students/validation';
+import {
+  MAX_CREATE_STUDENT_BODY_BYTES,
+  parseCreateStudentInput,
+} from '../students/validation';
 
 /**
  * Public student registration. The handler validates the request, creates a
@@ -16,12 +24,21 @@ const buildRepositoryHandler = (
   repository: StudentsRepository,
 ): HttpHandler => {
   return async (event) => {
-    const rawBody =
-      event.isBase64Encoded && event.body
-        ? Buffer.from(event.body, 'base64').toString('utf8')
-        : event.body;
+    const contentType = getHeader(event.headers, 'content-type');
+    if (!isJsonContentType(contentType)) {
+      return jsonResponse(415, {
+        error: 'Content-Type must be application/json',
+      });
+    }
 
-    const parsed = parseCreateStudentInput(rawBody);
+    const requestBody = readRequestBody(event);
+    if (requestBody.byteLength > MAX_CREATE_STUDENT_BODY_BYTES) {
+      return jsonResponse(413, {
+        error: `Request body must be at most ${MAX_CREATE_STUDENT_BODY_BYTES} bytes`,
+      });
+    }
+
+    const parsed = parseCreateStudentInput(requestBody.text);
     if (!parsed.ok) {
       return jsonResponse(400, { error: parsed.error });
     }

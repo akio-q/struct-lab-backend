@@ -94,6 +94,9 @@ Cognito User Pool
 - **Lambda teacher guard** додатково вимагає access token (не ID token) і точну
   групу `teachers`.
 - **DynamoDB** зберігає записи студентів; IAM обмежений однією таблицею.
+- **Application-level request hardening:** `POST /students` вимагає
+  `Content-Type: application/json` і обмежує decoded body до 4096 байт.
+  Це не edge-level захист і не захист від спаму.
 - **Rate limiting і CORS** поки не налаштовані.
 
 ## Структура проєкту
@@ -114,7 +117,7 @@ struct-lab-backend/
 │   ├── lib/
 │   │   ├── auth.ts                    # JWT claims і teacher authorization
 │   │   ├── errors.ts                  # Безпечне ім'я помилки для логів
-│   │   └── http.ts                    # JSON-відповіді та тип handler
+│   │   └── http.ts                    # JSON-відповіді, headers і body helpers
 │   └── students/
 │       ├── cursor.ts                  # Кодування/перевірка cursor
 │       ├── repository.ts              # DynamoDB PutItem/Scan
@@ -124,9 +127,10 @@ struct-lab-backend/
 │   ├── helpers/
 │   │   └── events.ts                  # Тестові API Gateway events
 │   ├── health.test.ts                 # GET /health
-│   ├── validation.test.ts             # Валідація body та limit
+│   ├── validation.test.ts             # Валідація body, limit і розміру
+│   ├── http.test.ts                   # Header/body helpers
 │   ├── cursor.test.ts                 # Формат і перевірка cursor
-│   ├── create-student.test.ts         # Публічне створення, 400/500, логи
+│   ├── create-student.test.ts         # Публічне створення, 400/413/415/500
 │   ├── list-students.test.ts          # Пагінація, авторизація, помилки
 │   ├── students-repository.test.ts    # PutCommand/ScanCommand
 │   ├── handler-initialization.test.ts # Відсутня STUDENTS_TABLE_NAME
@@ -305,6 +309,16 @@ Content-Type: application/json
 
 Правила валідації:
 
+- `Content-Type: application/json` обов'язковий. Допускається
+  `application/json; charset=utf-8`; регістр назви заголовка й media type не
+  має значення.
+- Максимальний розмір тіла — **4096 decoded bytes**. Для UTF-8 рахуються
+  байти, а не JavaScript-довжина рядка; для base64 тіло спершу декодується.
+- Перевірки виконуються в порядку: `Content-Type` → розмір тіла → JSON parsing →
+  валідація полів → запис у DynamoDB.
+- Це **application-level** перевірки. API Gateway усе одно приймає більші
+  payload до своїх platform limits; вони не є edge-level захистом, WAF або
+  anti-spam механізмом.
 - тіло має бути непорожнім JSON-об'єктом;
 - `fullName` — рядок; після `trim()` довжина від 1 до 200 символів;
 - `group` — рядок; після `trim()` довжина від 1 до 50 символів;
@@ -322,6 +336,15 @@ Content-Type: application/json
 | `fullName` задовгий | `fullName must be at most 200 characters` |
 | Відсутній/порожній/не строковий `group` | `group must be a non-empty string` |
 | `group` задовгий | `group must be at most 50 characters` |
+
+Точні повідомлення `413` і `415`:
+
+| Статус | Причина | `error` |
+| --- | --- | --- |
+| `415` | Відсутній або непідтримуваний `Content-Type` | `Content-Type must be application/json` |
+| `413` | Тіло більше 4096 decoded bytes | `Request body must be at most 4096 bytes` |
+
+Для `413` і `415` запис у DynamoDB не виконується. Тіло запиту не логується.
 
 Приклад `400`:
 
@@ -442,6 +465,12 @@ JSON-контракту застосунку. Фронтенд має орієн
 - **Публічна реєстрація.** `POST /students` навмисно доступний без авторизації.
   Це означає, що будь-хто може створювати записи; rate limiting, WAF, CAPTCHA та
   перевірка особи студента не реалізовані.
+- **Application-level request hardening.** `POST /students` вимагає
+  `Content-Type: application/json` (з опційним `charset=utf-8`) і приймає не
+  більше 4096 decoded bytes. Перевірки виконуються до JSON parsing і запису в
+  DynamoDB; відповіді — `415` або `413` у стандартному JSON-форматі. Це не
+  edge-level захист, не WAF і не захист від спаму: API Gateway усе одно
+  приймає більші payload до platform limits, а per-IP лімітів немає.
 - **Середовище зафіксовано.** `StructLabStack` явно pinned на account
   `677339799150` і region `eu-north-1`, відхиляє конфліктні `env`/`stackName`, а
   `bin/app.ts` перевіряє розв'язаний AWS target до синтезу. Це захист від
@@ -524,7 +553,7 @@ pnpm synth
 Очікувані результати:
 
 - `lint` і `typecheck` — без помилок;
-- `test` — **11 тестових файлів, 173 тести пройшли**;
+- `test` — **12 тестових файлів, 205 тестів пройшли**;
 - `build` — тека `dist/` з `.js`, `.d.ts` і source maps;
 - `synth` — `cdk.out/StructLabBackendStack.template.json` для стека
   `StructLabBackendStack-dev` і попередження про видалення таблиці (це
@@ -536,11 +565,15 @@ pnpm synth
 підміняється через dependency injection, а JWT claims подаються як синтетичний
 API Gateway event.
 
-- `test/validation.test.ts` — валідація ПІБ, групи, `limit`, cursor.
+- `test/validation.test.ts` — валідація ПІБ, групи, `limit`, cursor і
+  invariant, що максимальне валідне тіло менше за 4096 байт.
+- `test/http.test.ts` — case-insensitive header lookup, JSON `Content-Type`,
+  base64/UTF-8 decoding і вимірювання розміру тіла в байтах.
 - `test/cursor.test.ts` — round-trip, base64url, обмеження довжини, некоректні
   cursor.
 - `test/create-student.test.ts` — публічні `201`, UUID, обрізання пробілів,
-  base64 body, `400`, `500`, відсутність PII/токенів у логах.
+  base64 body, `400`, `413`, `415`, межі 4095/4096/4097 байт, `500`,
+  відсутність PII/токенів у логах.
 - `test/list-students.test.ts` — limit за замовчуванням, кастомний limit,
   cursor, `nextCursor`, некоректні параметри, `401`/`403`, `500`, відсутність
   PII у логах.
