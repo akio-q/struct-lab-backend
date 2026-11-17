@@ -1,9 +1,10 @@
 # Frontend Integration Contract
 
-**Статус:** контракт відповідає реалізованому backend (Фаза 3, P4-02.1
-request hardening, P4-02.2 CORS, P4-02.3 throttling і P4-02.4 concurrency
-awareness). AWS-деплой ще не виконувався, тому реальної базової URL-адреси поки
-немає. Після деплою її треба взяти зі stack output `HttpApiUrl`.
+**Статус:** P4-01 і P4-02 (P4-02.1 request hardening, P4-02.2 CORS, P4-02.3
+throttling і P4-02.4 concurrency awareness) реалізовано й перевірено локально;
+P4-02.5 security review — PASS. Наступна запланована задача — P4-03. AWS-деплой
+ще не виконувався, тому реальної базової URL-адреси поки немає. Після деплою її
+треба взяти зі stack output `HttpApiUrl`.
 
 Цей документ описує лише те, що реально реалізовано в коді. Він не додає
 endpoint-ів, полів або поведінки, яких немає в backend.
@@ -323,12 +324,18 @@ XSS в admin-інтерфейсі викладача.
 }
 ```
 
-Це може бути помилка DynamoDB або ініціалізації Lambda. Деталі навмисно не
-розкриваються.
+Це може бути помилка DynamoDB, ініціалізації Lambda або gateway-generated `500`
+від Lambda throttling. Така відповідь може не мати звичайної JSON-структури
+застосунку; деталі внутрішніх помилок навмисно не розкриваються.
 
-**Важливо:** у `POST /students` немає idempotency key. Якщо клієнт не отримав
-відповідь через мережеву помилку, а запис уже створився, повторний POST створить
-дублікат. Автоматичний retry слід робити обережно.
+Gateway-generated помилки, зокрема `500` від Lambda throttling, можуть не
+містити CORS-заголовків. У браузері це може виглядати як мережева помилка, а не
+як HTTP `500`.
+
+**Важливо:** у `POST /students` немає idempotency key. Не робіть автоматичний
+retry `POST /students` після `500`, `429`, таймауту або мережевої помилки:
+повторний запит може створити дублікат. Повторюйте лише після підтвердження
+користувача.
 
 ## 5. `GET /admin/students`
 
@@ -460,10 +467,12 @@ const fetchAllStudents = async (accessToken: string): Promise<Student[]> => {
 
 Можливі причини:
 
-- відсутній заголовок `Authorization`;
-- токен невалідний, прострочений або має неправильний підпис;
-- токен виданий не для цього User Pool або App Client;
-- у Lambda потрапив ID token або інший `token_use`, відмінний від `access`.
+- API Gateway відхиляє запит, якщо:
+  - відсутній заголовок `Authorization`;
+  - токен невалідний, прострочений або має неправильний підпис;
+  - токен виданий не для цього User Pool або App Client.
+- Lambda повертає `401`, якщо JWT валідний, але це ID token або інший
+  `token_use`, відмінний від `access`.
 
 Якщо токен відхилений API Gateway, тіло `401` генерує API Gateway; воно може
 відрізнятися від `{"error":"Unauthorized"}`. Якщо до запиту дійшла Lambda,
@@ -480,7 +489,8 @@ const fetchAllStudents = async (accessToken: string): Promise<Student[]> => {
 
 ### 5.6. `403 Forbidden`
 
-Access token валідний, але не містить точної групи `teachers`.
+Access token валідний, але не містить точної групи `teachers`. Це відповідь
+Lambda teacher guard, а не API Gateway authorizer.
 
 ```json
 {
@@ -557,7 +567,9 @@ Origin перевіряється точно: схема, host і port мают�
 `POST /students` із `Content-Type: application/json` і `GET /admin/students` із
 `Authorization` викликають браузерний preflight. Браузер робить його
 автоматично; не надсилайте `OPTIONS` вручну і не додавайте CORS-заголовки в
-Next.js.
+Next.js. Успішний preflight — це 2xx із потрібними `access-control-*`
+заголовками; фактичний статус (зазвичай `204`) фіксуйте під час post-deploy
+перевірки.
 
 Якщо port 3000 зайнятий і Next.js обрав інший port, цей origin не буде
 дозволений. Звільніть port або додайте точний новий origin у
@@ -579,9 +591,10 @@ query string, fragment, credentials, дублікати і wildcards. Зміна
 - CORS — не rate limiting, не WAF і не захист від спаму. Він лише обмежує
   браузерні cross-origin запити.
 - CORS виконується браузером. Серверні клієнти та curl його ігнорують.
-- Відповіді `401`, `403` і `429`, які API Gateway генерує до виклику Lambda,
-  можуть не містити CORS-заголовків. Це треба перевірити після деплою; локальні
-  тести та синтез цього не підтверджують.
+- Відповіді `401`, `403`, `429` і gateway-generated `500` від Lambda throttling
+  можуть не містити CORS-заголовків, якщо їх генерує API Gateway, а не
+  інтеграція. Це треба перевірити після деплою; локальні тести та синтез цього
+  не підтверджують.
 
 ## 8. Throttling
 
@@ -661,7 +674,7 @@ origin. Локальні тести перевіряють лише синтез
 
 ## 10. Чекліст інтеграції
 
-1. Задеплоїти stack (окрема фаза; у Фазі 3 деплою не було).
+1. Задеплоїти stack (окрема фаза; у P4-01/P4-02 деплою не було).
 2. Взяти `HttpApiUrl`, `UserPoolId` і `UserPoolClientId` зі stack outputs.
 3. Налаштувати Cognito SDK із цими `UserPoolId` та `UserPoolClientId`.
 4. Створити викладача через адміністратора Cognito і додати до групи `teachers`.

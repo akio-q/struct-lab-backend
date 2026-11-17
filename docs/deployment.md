@@ -1,9 +1,12 @@
 # Dev deployment: environment pinning and safeguards
 
-**Статус:** P4-01, P4-02.2, P4-02.3 і P4-02.4 реалізовано локально. У межах
-цих задач жодного AWS API-виклику, `cdk bootstrap`, `cdk diff`, `cdk deploy` або
+**Статус:** P4-01 і P4-02 (P4-02.1–P4-02.4) реалізовано й перевірено локально;
+P4-02.5 security review — PASS. Наступна запланована задача — P4-03. У межах цих
+задач жодного AWS API-виклику, `cdk bootstrap`, `cdk diff`, `cdk deploy` або
 `cdk destroy` не виконувалося; AWS-ресурсів ще не створено. Quota snapshot у
-розділі 5 отриманий вручну поза цим workflow.
+розділі 5 отриманий вручну поза цим workflow. Акаунт залишається на AWS Free
+Plan; реальні витрати не передбачені, платні функції не вмикаються без окремого
+схвалення.
 
 Цей документ описує зафіксоване dev-середовище, локальні перевірки та безпечні
 кроки для майбутнього деплою. Він не є дозволом виконувати деплой: кожен
@@ -62,6 +65,25 @@ AWS-крок потребує окремого ручного схвалення
 10. **Concurrency decision.** P4-02.4 не додає reserved або provisioned
     concurrency, Lambda versions/aliases чи quota increase і не змінює
     конфігурацію Lambda. Деталі та quota snapshot — в розділі 5.
+11. **Request hardening.** `POST /students` приймає лише
+    `Content-Type: application/json` (з опційним `charset=utf-8`) і не більше
+    **4096 decoded bytes**. Перевірки виконуються до JSON parsing і запису в
+    DynamoDB; некоректний `Content-Type` повертає `415`, перевищення ліміту —
+    `413`. Це application-level захист, не edge-level, не WAF і не заміна
+    per-IP rate limiting. Деталі — в розділі 2.1.
+
+### 2.1. Request hardening для `POST /students`
+
+- Обов'язковий `Content-Type: application/json`; допускається параметр
+  `charset=utf-8`. Регістр назви заголовка й media type не має значення.
+- Максимальний розмір тіла — **4096 decoded bytes**. Для UTF-8 рахуються байти,
+  а не довжина JavaScript-рядка; base64-тіло спершу декодується.
+- Перевірки виконуються в порядку: `Content-Type` → розмір тіла → JSON parsing →
+  валідація полів → запис у DynamoDB.
+- Відсутній або некоректний `Content-Type` → `415`; перевищення ліміту → `413`.
+- Відхилені запити не створюють записів у DynamoDB.
+- Це **application-level** обмеження. API Gateway усе одно приймає більші payload
+  до platform limits; це не edge-level захист, не WAF і не anti-spam механізм.
 
 ## 3. CORS
 
@@ -97,8 +119,9 @@ cross-origin cookies не використовуються (`AllowCredentials: f
 
 CORS не є автентифікацією, rate limiting, WAF або anti-spam захистом.
 `GET /admin/students` усе одно вимагає Cognito access token і групу `teachers`.
-Відповіді `401`, `403` і `429`, які API Gateway генерує до виклику Lambda, можуть
-не містити CORS-заголовків; це перевіряється після деплою.
+Відповіді `401`, `403`, `429` і gateway-generated `500` від Lambda throttling
+можуть не містити CORS-заголовків, якщо їх генерує API Gateway, а не інтеграція;
+це перевіряється після деплою.
 
 ## 4. Throttling
 
@@ -260,10 +283,11 @@ pnpm synth
 
 Не вимикайте перевірку в коді, щоб обійти це обмеження.
 
-## 7. Майбутні кроки деплою (не виконано в P4-01, P4-02.2, P4-02.3 або P4-02.4)
+## 7. Майбутні кроки деплою (не виконано в P4-01 і P4-02)
 
 Наведені команди призначені для наступних задач Фази 4 після окремого
-схвалення. P4-01, P4-02.2, P4-02.3 і P4-02.4 їх **не виконували**.
+схвалення. P4-01 і P4-02 їх **не виконували**; P4-03 — наступна запланована
+задача.
 
 1. Встановити/налаштувати AWS CLI v2 і profile `structlab-dev` з регіоном
    `eu-north-1`.
@@ -287,7 +311,7 @@ pnpm synth
    Не запитувати quota increase без окремого схвалення. Якщо значення
    відрізняються від snapshot, оновити документацію перед деплоєм.
 
-4. Виконати bootstrap (P4-02, окреме схвалення):
+4. Виконати bootstrap (окреме схвалення):
 
    ```bash
    pnpm exec cdk bootstrap aws://677339799150/eu-north-1 --profile structlab-dev
@@ -315,10 +339,13 @@ pnpm synth
      -H "Access-Control-Request-Headers: content-type"
    ```
 
-   Очікувано: `204` і `access-control-allow-origin: http://localhost:3000`,
-   `access-control-allow-methods` містить `POST`, `access-control-allow-headers`
-   містить `content-type`, `access-control-max-age: 300`. Запит з origin поза
-   allowlist не повинен отримувати `access-control-allow-origin`.
+   Очікувано: успішний 2xx із заголовком
+   `access-control-allow-origin: http://localhost:3000`,
+   `access-control-allow-methods` містить `POST`,
+   `access-control-allow-headers` містить `content-type`,
+   `access-control-max-age: 300`. Фактичний статус (зазвичай `204`) зафіксувати
+   під час post-deploy перевірки. Запит з origin поза allowlist не повинен
+   отримувати `access-control-allow-origin`.
 
 8. Перевірити gateway-generated помилки. `401`/`403` для `/admin/students`,
    `429` від API Gateway throttling і `500` від Lambda throttling мають
@@ -362,14 +389,16 @@ pnpm synth
 - Не запускайте `cdk destroy` на середовищі, де є дані, без окремого
   runbook і схвалення.
 
-## 9. Межі P4-01, P4-02.2, P4-02.3 і P4-02.4
+## 9. Межі P4-01, P4-02.1, P4-02.2, P4-02.3 і P4-02.4
 
 P4-01 не додає throttling, WAF, budgets, alarms, PITR, deletion protection, MFA
-або інші задачі Фази 4. P4-02.2 додає native CORS для `http://localhost:3000`.
-P4-02.3 додає best-effort throttling на default stage (`10 req/s`, burst `20`).
-P4-02.4 додає лише документацію та regression-тест: reserved і provisioned
-concurrency не налаштовані, quota increase не запитується, Lambda
-configuration не змінюється. Жодна з цих задач не додає per-IP rate limiting,
-WAF, CAPTCHA або CORS для задеплоєного HTTPS-домену. Поточні API-маршрути,
-Lambda handlers, DynamoDB schema, Cognito authorization behavior та IAM не
-змінювалися.
+або інші задачі Фази 4. P4-02.1 додає application-level request hardening для
+`POST /students` (`Content-Type: application/json`, 4096 decoded bytes,
+`413`/`415`); це не edge-level захист. P4-02.2 додає native CORS для
+`http://localhost:3000`. P4-02.3 додає best-effort throttling на default stage
+(`10 req/s`, burst `20`). P4-02.4 додає лише документацію та regression-тест:
+reserved і provisioned concurrency не налаштовані, quota increase не
+запитується, Lambda configuration не змінюється. Жодна з цих задач не додає
+per-IP rate limiting, WAF, CAPTCHA або CORS для задеплоєного HTTPS-домену.
+Поточні API-маршрути, Lambda handlers, DynamoDB schema, Cognito authorization
+behavior та IAM не змінювалися.

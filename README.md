@@ -3,10 +3,14 @@
 Бекенд навчального вебзастосунку **StructLab** — тренажера структур даних.
 
 Поточна фаза — **Фаза 4**: підготовка dev-деплою та посилення безпеки. P4-01
-фіксує цільовий AWS account, region, stack name і resource tags.
+фіксує цільовий AWS account, region, stack name і resource tags. P4-02.1–P4-02.4
+додають request hardening, CORS, throttling і документування обмежень Lambda
+concurrency.
 
-> **Статус:** P4-01 реалізовано й перевірено локально. Деплою в AWS, bootstrap,
-> `cdk diff` і реальних integration-тестів ще не було.
+> **Статус:** P4-01 і P4-02 (P4-02.1–P4-02.4) реалізовано й перевірено локально;
+> P4-02.5 security review — PASS. Наступна запланована задача — P4-03. Деплою в
+> AWS, bootstrap, `cdk diff` і реальних integration-тестів ще не було. Акаунт
+> залишається на AWS Free Plan; реальні витрати не передбачені.
 
 ## Поточний API
 
@@ -32,6 +36,18 @@
 - P4-01: dev-середовище зафіксовано в `lib/environments.ts` — account
   `677339799150`, region `eu-north-1`, stack `StructLabBackendStack-dev` і теги
   `Project`, `Service`, `Environment`, `ManagedBy`.
+- P4-02.1: application-level request hardening для публічного `POST /students` —
+  обов'язковий `Content-Type: application/json`, ліміт **4096 decoded bytes**,
+  відповіді `413`/`415`, перевірки до запису в DynamoDB, без PII у логах.
+- P4-02.2: native CORS на API Gateway HTTP API — точний origin
+  `http://localhost:3000`, методи `GET`/`POST`, headers
+  `content-type`/`authorization`, `AllowCredentials: false`, `MaxAge: 300`,
+  без wildcard і без окремого `OPTIONS`-маршруту.
+- P4-02.3: best-effort throttling на існуючому `$default` stage — `10 req/s`,
+  burst `20`, `AutoDeploy: true`, без route-specific overrides.
+- P4-02.4: документовано обмеження Lambda concurrency; reserved і provisioned
+  concurrency, Lambda versions/aliases та quota increase свідомо не
+  налаштовані, додано regression-тест.
 - Публічний `POST /students`:
   - без Cognito-акаунта, JWT або групи `teachers`;
   - валідація `fullName` і `group`;
@@ -494,8 +510,9 @@ JSON-контракту застосунку. Фронтенд має орієн
 - **Майбутній домен фронтенду.** Для задеплоєного Next.js треба додати його
   точний HTTPS origin у `DEV_ENVIRONMENT.corsAllowedOrigins`, перевірити локально
   і задеплоїти. Wildcard заборонений.
-- **CORS для gateway-помилок.** Відповіді `401`/`403`/`429`, згенеровані API
-  Gateway до виклику Lambda, можуть не містити CORS-заголовків. Це потребує
+- **CORS для gateway-помилок.** Відповіді `401`/`403`/`429` і
+  gateway-generated `500` від Lambda throttling можуть не містити
+  CORS-заголовків, якщо їх генерує API Gateway, а не інтеграція. Це потребує
   post-deploy перевірки; локальні тести цього не підтверджують.
 - **API Gateway throttling.** Default stage `$default` має
   `DefaultRouteSettings` з rate **10 req/s** і burst **20**. Перевищення
@@ -661,6 +678,7 @@ API Gateway event.
 | AWS account | `677339799150` |
 | AWS region | `eu-north-1` |
 | AWS CLI profile | `structlab-dev` |
+| AWS plan | AWS Free Plan |
 | Environment | `dev` |
 | Stack name | `StructLabBackendStack-dev` |
 | Джерело істини | `lib/environments.ts` |
@@ -699,7 +717,7 @@ AWS-ключів. Stack має фіксовані `account`/`region`; без cre
 | `cdk synth` пише про feature flags | Інформаційне повідомлення, не помилка. |
 | `pnpm synth` не знаходить `ts-node` | Виконати `pnpm install`. |
 | `Refusing to synthesize StructLab dev ...` | Активні credentials вказують на інший account/region. Використайте profile `structlab-dev` або очистіть `CDK_DEFAULT_ACCOUNT`/`CDK_DEFAULT_REGION` для локального synth. |
-| Потрібен деплой | Не входить у P4-02.3. Див. [`docs/deployment.md`](docs/deployment.md); потрібні AWS CLI/SSO, bootstrap і окреме схвалення. |
+| Потрібен деплой | AWS deployment не входить у P4-02 і потребує окремого схвалення. Див. [`docs/deployment.md`](docs/deployment.md); потрібні AWS CLI/SSO, bootstrap і post-deploy перевірки. |
 
 ## Документація фаз
 
@@ -716,8 +734,8 @@ AWS-ключів. Stack має фіксовані `account`/`region`; без cre
 
 ## Наступні кроки
 
-1. P4-02: налаштувати AWS CLI/SSO, перевірити target і виконати bootstrap після
-   окремого схвалення.
+1. P4-03 — наступна запланована задача. Для майбутнього деплою потрібні AWS
+   CLI/SSO, перевірка target і bootstrap після окремого схвалення.
 2. Додати HTTPS-origin задеплоєного фронтенду в `corsAllowedOrigins`.
 3. Додати per-IP rate limiting, WAF і CAPTCHA для публічної реєстрації.
 4. Перед деплоєм повторно перевірити Lambda account quotas; reserved і
