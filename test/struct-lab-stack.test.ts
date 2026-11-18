@@ -125,6 +125,39 @@ interface StageResource {
   };
 }
 
+interface DynamoTableResource {
+  DeletionPolicy?: string;
+  UpdateReplacePolicy?: string;
+  Properties?: {
+    BillingMode?: string;
+    DeletionProtectionEnabled?: boolean;
+    OnDemandThroughput?: {
+      MaxReadRequestUnits?: number;
+      MaxWriteRequestUnits?: number;
+    };
+    KeySchema?: Array<{
+      AttributeName?: string;
+      KeyType?: string;
+    }>;
+    AttributeDefinitions?: Array<{
+      AttributeName?: string;
+      AttributeType?: string;
+    }>;
+    SSESpecification?: {
+      SSEEnabled?: boolean;
+      SSEType?: string;
+      KMSMasterKeyId?: unknown;
+    };
+    PointInTimeRecoverySpecification?: unknown;
+    StreamSpecification?: unknown;
+    TimeToLiveSpecification?: unknown;
+    GlobalSecondaryIndexes?: unknown;
+    Replicas?: unknown;
+    ProvisionedThroughput?: unknown;
+    WarmThroughput?: unknown;
+  };
+}
+
 interface TagPair {
   Key?: string;
   Value?: string;
@@ -293,21 +326,54 @@ describe('StructLabStack', () => {
     ).toThrow(/must use stack name StructLabBackendStack-dev/);
   });
 
-  it('creates the Students table with on-demand billing and encryption', () => {
+  it('hardens the existing Students table without changing its identity', () => {
     template.resourceCountIs('AWS::DynamoDB::Table', 1);
-    template.hasResource('AWS::DynamoDB::Table', {
-      DeletionPolicy: 'Delete',
-      UpdateReplacePolicy: 'Delete',
-      Properties: {
-        BillingMode: 'PAY_PER_REQUEST',
-        KeySchema: [{ AttributeName: 'studentId', KeyType: 'HASH' }],
-        AttributeDefinitions: [
-          { AttributeName: 'studentId', AttributeType: 'S' },
-        ],
-        SSESpecification: { SSEEnabled: true },
-        DeletionProtectionEnabled: false,
-      },
+
+    const [logicalId, table] = getSingleResource<DynamoTableResource>(
+      'AWS::DynamoDB::Table',
+    );
+
+    expect(logicalId).toBe('StudentsTableDAB56938');
+    expect(table.DeletionPolicy).toBe('Delete');
+    expect(table.UpdateReplacePolicy).toBe('Delete');
+    expect(table.Properties?.BillingMode).toBe('PAY_PER_REQUEST');
+    expect(table.Properties?.DeletionProtectionEnabled).toBe(true);
+    expect(table.Properties?.OnDemandThroughput).toEqual({
+      MaxReadRequestUnits: 25,
+      MaxWriteRequestUnits: 25,
     });
+    expect(table.Properties?.KeySchema).toEqual([
+      { AttributeName: 'studentId', KeyType: 'HASH' },
+    ]);
+    expect(table.Properties?.AttributeDefinitions).toEqual([
+      { AttributeName: 'studentId', AttributeType: 'S' },
+    ]);
+    expect(table.Properties?.SSESpecification).toEqual({ SSEEnabled: true });
+  });
+
+  it('does not enable deferred DynamoDB features or add resources', () => {
+    const [, table] = getSingleResource<DynamoTableResource>(
+      'AWS::DynamoDB::Table',
+    );
+
+    expect(table.Properties?.PointInTimeRecoverySpecification).toBeUndefined();
+    expect(table.Properties?.StreamSpecification).toBeUndefined();
+    expect(table.Properties?.TimeToLiveSpecification).toBeUndefined();
+    expect(table.Properties?.GlobalSecondaryIndexes).toBeUndefined();
+    expect(table.Properties?.Replicas).toBeUndefined();
+    expect(table.Properties?.ProvisionedThroughput).toBeUndefined();
+    expect(table.Properties?.WarmThroughput).toBeUndefined();
+    expect(table.Properties?.SSESpecification?.KMSMasterKeyId).toBeUndefined();
+
+    for (const type of [
+      'AWS::Backup::BackupPlan',
+      'AWS::Backup::BackupVault',
+      'AWS::DynamoDB::GlobalTable',
+      'AWS::KMS::Key',
+      'AWS::Lambda::EventSourceMapping',
+    ]) {
+      template.resourceCountIs(type, 0);
+    }
   });
 
   it('creates exactly three Node.js Lambda functions', () => {

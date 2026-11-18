@@ -8,19 +8,20 @@
 concurrency.
 
 > **Статус:** P4-01 і P4-02 (P4-02.1–P4-02.4) реалізовано й перевірено локально;
-> P4-02.5 security review — PASS. P4-03.1 documentation-only policy для даних,
-> retention і recovery підготовлено локально. Інфраструктурні зміни
-> P4-03.2–P4-03.5 ще не реалізовані. Деплою в AWS, bootstrap, `cdk diff` і
-> реальних integration-тестів ще не було. Акаунт залишається на AWS Free Plan;
-> реальні грошові витрати не передбачені, але AWS credits можуть витрачатися.
+> P4-02.5 security review — PASS. P4-03.1 policy для даних, retention і recovery
+> та P4-03.2 DynamoDB hardening реалізовано й перевірено локально.
+> Інфраструктурні зміни P4-03.3–P4-03.5 ще не реалізовані. Деплою в AWS,
+> bootstrap, `cdk diff` і реальних integration-тестів ще не було. Акаунт
+> залишається на AWS Free Plan; реальні грошові витрати не передбачені, але AWS
+> credits можуть витрачатися.
 
 ## P4-03 roadmap
 
 | Підзадача | Зміст | Статус |
 | --- | --- | --- |
-| P4-03.1 | Data Governance, Retention & Recovery | Виконано локально; очікує review |
-| P4-03.2 | DynamoDB Hardening | Заплановано |
-| P4-03.3 | Cognito Lifecycle | Заплановано |
+| P4-03.1 | Data Governance, Retention & Recovery | Виконано; review PASS |
+| P4-03.2 | DynamoDB Hardening | Виконано локально; очікує review |
+| P4-03.3 | Cognito Lifecycle | Наступна запланована |
 | P4-03.4 | Cognito Token Security | Заплановано |
 | P4-03.5 | Cognito Account Security | Заплановано |
 | P4-03.6 | Final Review | Заплановано |
@@ -86,7 +87,7 @@ concurrency.
 - CORS для задеплоєного HTTPS-домену фронтенду (зараз дозволений лише
   `http://localhost:3000`).
 - Перевірки особи студента та захисту від дублікатів.
-- Production hardening: MFA, deletion protection, бекапи, PITR, аудит.
+- Production hardening: MFA, бекапи, PITR, аудит.
 - Пагінації по 5000 записів — вимога ще не підтверджена.
 
 ## Архітектура
@@ -116,10 +117,9 @@ Cognito User Pool
   └── access token 30 хвилин
 ```
 
-Діаграма відображає поточний стан до P4-03.2–P4-03.5. Затверджені майбутні
-зміни (DynamoDB deletion protection/throughput caps, Cognito Essentials, 15/7,
-revocation/enumeration, admin-only recovery) описані в розділі
-«Дані, retention і recovery».
+Діаграма відображає поточний стан після P4-03.2; затверджені майбутні зміни
+Cognito (Essentials, 15/7, revocation/enumeration, admin-only recovery) для
+P4-03.3–P4-03.5 описані в таблиці запланованої конфігурації в розділі «Cognito».
 
 Пояснення:
 
@@ -234,10 +234,14 @@ struct-lab-backend/
 | Partition key | `studentId` (String) |
 | Billing mode | `PAY_PER_REQUEST` (on-demand) |
 | Encryption | AWS managed key (`TableEncryption.AWS_MANAGED`) |
-| Deletion protection | вимкнено (навчальне середовище) |
+| Deletion protection | увімкнено (`deletionProtection: true`, P4-03.2) |
+| Max on-demand read | 25 RRU/s (`maxReadRequestUnits: 25`) |
+| Max on-demand write | 25 WRU/s (`maxWriteRequestUnits: 25`) |
 | Removal policy | `DESTROY` |
 | Update replace policy | `Delete` |
 | Point-in-time recovery | не налаштовано |
+
+Це локально синтезована конфігурація P4-03.2; AWS deploy не виконувався.
 
 Запис студента:
 
@@ -252,21 +256,45 @@ struct-lab-backend/
 
 ### Ризик втрати даних
 
-`RemovalPolicy.DESTROY` означає, що під час видалення stack **усі дані таблиці
-будуть втрачені**. Це зроблено навмисно для навчального середовища, а в
-`cdk synth` додається попередження через CDK Annotations.
+Локально синтезована конфігурація P4-03.2 має `RemovalPolicy.DESTROY` **і**
+увімкнений deletion protection. Deletion protection не дає CloudFormation
+видалити таблицю, доки захист не вимкнено. Тому `cdk destroy` або rollback,
+який вимагає видалення чи заміни таблиці, може завершитися помилкою.
+
+Вимкнення deletion protection саме по собі не видаляє таблицю чи її записи; воно
+лише дозволяє подальше авторизоване видалення таблиці. Успішне видалення таблиці
+знищує збережені записи студентів. Вимкнення захисту та destructive operations
+потребують окремого схвалення; export і перевірка мають передувати навмисному
+видаленню.
+
+Deletion protection **не є backup**: він не запобігає видаленню окремих items,
+перезапису, пошкодженню або логічним помилкам і не захищає від втрати доступу
+до AWS-акаунта. Export і перевірка мають передувати будь-якій навмисній
+destructive operation; деталі — у розділі «Дані, retention і recovery» та
+[`docs/deployment.md`](docs/deployment.md).
 
 Для production потрібно:
 
 - змінити removal policy на `RETAIN`;
-- увімкнути `deletionProtection: true`;
+- зберегти deletion protection;
 - увімкнути point-in-time recovery та налаштувати бекапи;
 - керувати таблицею через окремий production stack.
 
-Поточна конфігурація вище — це стан до P4-03.2. Затверджена майбутня
-конфігурація (DESTROY + deletion protection, ліміти on-demand throughput) і
-policy щодо даних описані в розділі «Дані, retention і recovery». Ці зміни не
-вважаються реалізованими до відповідних підзадач P4-03.
+### On-demand throughput limits
+
+- Максимум on-demand read — **25 RRU/s**, write — **25 WRU/s**.
+- Це request units, а не гарантована кількість API-запитів. Споживання залежить
+  від розміру item, типу операції та read consistency.
+- `Scan` може споживати кілька read request units за один API-запит.
+- Ліміти best-effort: burst capacity може тимчасово перевищувати їх.
+- Це не per-user quotas і не жорсткі spending caps.
+- API Gateway throttling (`10 req/s`, burst `20`) і Lambda concurrency — окремі
+  контролі.
+- DynamoDB throttling може проявлятися як наявні application error responses.
+  `POST /students` не можна автоматично retry-ити, бо idempotency не
+  реалізована. Існуюча AWS SDK retry behavior не змінюється.
+- Локальний synth підтверджує конфігурацію, але не фактичну поведінку під
+  навантаженням; throughput і throttling у AWS не тестувалися.
 
 ## Cognito
 
@@ -337,8 +365,9 @@ SRP-логіну має збігатися з фактичним username ака
 ## Дані, retention і recovery (P4-03.1)
 
 > **Межі P4-03.1.** Це документаційна policy для dev. Вона не змінює CDK, IAM,
-> DynamoDB, Cognito або AWS-ресурси. Усі майбутні зміни P4-03.2–P4-03.5 ще не
-> реалізовані; поточний стан стека описаний у розділах «DynamoDB» і «Cognito».
+> DynamoDB, Cognito або AWS-ресурси. P4-03.2 DynamoDB hardening реалізовано
+> локально; майбутні зміни P4-03.3–P4-03.5 ще не реалізовані. Поточний стан
+> стека описаний у розділах «DynamoDB» і «Cognito».
 
 ### Класифікація даних
 
@@ -495,19 +524,16 @@ SRP-логіну має збігатися з фактичним username ака
 
 ### Видалення, rollback і deletion protection
 
-Затверджена майбутня конфігурація DynamoDB (P4-03.2 — DynamoDB Hardening):
+Поточний локальний стан після P4-03.2 (AWS deploy не виконувався):
 
-| Параметр | P4-03.1 (поточний стек) | Затверджено для P4-03.2 |
-| --- | --- | --- |
-| `RemovalPolicy` | `DESTROY` | `DESTROY` |
-| Deletion protection | вимкнено | увімкнено |
-| Max on-demand read | не задано | 25 RRU/s |
-| Max on-demand write | не задано | 25 WRU/s |
-| Encryption | AWS managed key | без змін |
-| PITR / AWS Backup / TTL | немає | deferred |
-
-Ці значення є **цільовими**. P4-03.1 не реалізує deletion protection або
-throughput caps і не змінює поточний CDK-стек.
+| Параметр | Поточний стек |
+| --- | --- |
+| `RemovalPolicy` | `DESTROY` |
+| Deletion protection | увімкнено |
+| Max on-demand read | 25 RRU/s |
+| Max on-demand write | 25 WRU/s |
+| Encryption | AWS managed key |
+| PITR / AWS Backup / TTL | немає (deferred) |
 
 - Deletion protection захищає таблицю від `DeleteTable`, але **не є backup**:
   він не запобігає видаленню окремих items, перезапису, пошкодженню або
@@ -520,8 +546,9 @@ throughput caps і не змінює поточний CDK-стек.
   “обійти” помилку deployment.
 - Export і перевірка мають передувати будь-якій навмисній destructive
   операції.
-- Вимкнення deletion protection потребує окремого схвалення; після вимкнення
-  захист більше не діє.
+- Вимкнення deletion protection потребує окремого схвалення; воно не видаляє
+  таблицю чи записи, але дозволяє подальше авторизоване видалення таблиці, яке
+  знищить збережені записи студентів.
 - Ніколи не видаляйте і не перестворюйте таблицю автоматично для вирішення
   проблем deployment або rollback.
 
@@ -536,18 +563,21 @@ throughput caps і не змінює поточний CDK-стек.
 - DynamoDB storage, reads і writes, а також ручні export/restore можуть
   витрачати AWS credits. Це не означає автоматичних грошових списань, але й не
   означає необмеженого безкоштовного використання.
-- У P4-03.1 немає PITR, AWS Backup, customer-managed KMS keys або іншої
-  платної інфраструктури.
+- On-demand limits 25 RRU/s і 25 WRU/s не є hard spending caps і не гарантують
+  нульового споживання credits; вони обмежують request units best-effort.
+- P4-03.1 і P4-03.2 не додають PITR, AWS Backup, customer-managed KMS keys або
+  іншу платну інфраструктуру.
 - Paid Plan upgrade не передбачений.
 - Документ не наводить цінових гарантій: фактичне споживання credits залежить
   від акаунта, регіону й майбутніх змін AWS.
 
-### Прийняті обмеження P4-03.1
+### Прийняті обмеження P4-03.1 і P4-03.2
 
 - Retention policy не enforced автоматично; потрібне ручне очищення.
 - Немає PITR, AWS Backup, DynamoDB TTL або автоматичного cleanup.
 - Export/restore runbook не перевірений на задеплоєних AWS-ресурсах.
-- Deletion protection і throughput caps ще не реалізовані.
+- Deletion protection і throughput caps реалізовані локально в P4-03.2, але не
+  перевірені в AWS.
 - Dev не схвалений для реальних персональних даних.
 - Free Plan є тимчасовим; зовнішній export — єдина практична стратегія recovery
   поза акаунтом.
@@ -846,12 +876,15 @@ JSON-контракту застосунку. Фронтенд має орієн
   збережений User Pool автоматично: створюються нові Cognito-ресурси, і
   викладачів треба знову створити в новому User Pool (або явно імпортувати
   збережений pool) та додати до групи `teachers`. Таблиця має `DESTROY` і
-  вимкнений deletion protection; видалення stack знищить усі записи студентів.
+  увімкнений deletion protection; видалення stack або rollback може
+  завершитися помилкою, доки захист не вимкнено окремо схваленим рішенням.
+  Вимкнення захисту не видаляє дані саме по собі, але дозволяє подальше
+  авторизоване видалення таблиці, яке знищить усі записи студентів.
 - **Деплой не виконувався.** Реальні AWS-ресурси, підписи JWT і робота
   authorizer не перевірені integration-тестами.
 - **Production hardening попереду:** per-IP rate limiting, WAF, identity
   verification, MFA, перегляд Lambda concurrency/quota під навантаженням,
-  бекапи, PITR, deletion protection, моніторинг та аудит.
+  бекапи, PITR, моніторинг та аудит.
 
 Історичні рішення Фази 2 збережені в
 [`docs/phase-2-plan.md`](docs/phase-2-plan.md). Вони описують попередній стан і
@@ -1010,9 +1043,10 @@ AWS-ключів. Stack має фіксовані `account`/`region`; без cre
 
 ## Наступні кроки
 
-1. P4-03.1 documentation-only policy виконано локально. Інфраструктурні зміни
-   P4-03.2–P4-03.5 потребують окремого схвалення. Для майбутнього деплою
-   потрібні AWS CLI/SSO, перевірка target і bootstrap після окремого схвалення.
+1. P4-03.2 DynamoDB hardening виконано локально; наступна запланована задача —
+   P4-03.3 Cognito Lifecycle. Інфраструктурні зміни P4-03.3–P4-03.5 потребують
+   окремого схвалення. Для майбутнього деплою потрібні AWS CLI/SSO, перевірка
+   target і bootstrap після окремого схвалення.
 2. Додати HTTPS-origin задеплоєного фронтенду в `corsAllowedOrigins`.
 3. Додати per-IP rate limiting, WAF і CAPTCHA для публічної реєстрації.
 4. Перед деплоєм повторно перевірити Lambda account quotas; reserved і

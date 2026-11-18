@@ -125,17 +125,25 @@ export class StructLabStack extends Stack {
       },
       billingMode: BillingMode.PAY_PER_REQUEST,
       encryption: TableEncryption.AWS_MANAGED,
-      // Learning environment only: deletion protection is off and the table
-      // is removed together with the stack. Never use this in production.
-      deletionProtection: false,
+      // Synthetic dev environment: RemovalPolicy.DESTROY remains, but deletion
+      // protection blocks CloudFormation from deleting the table while enabled.
+      // Disabling it requires separate approval and only permits a later
+      // authorized deletion.
+      deletionProtection: true,
+      maxReadRequestUnits: 25,
+      maxWriteRequestUnits: 25,
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
     Annotations.of(studentsTable).addWarning(
-      'LEARNING ENVIRONMENT ONLY: the Students table is deleted together ' +
-        'with this stack, so all student data will be lost. For production, ' +
-        'use RemovalPolicy.RETAIN, enable deletion protection, and configure ' +
-        'backups.',
+      'LEARNING ENVIRONMENT ONLY: the Students table uses RemovalPolicy.DESTROY ' +
+        'with deletion protection enabled. Stack deletion or rollback may fail ' +
+        'while protection is enabled. Disabling protection does not delete the ' +
+        'table or its records; it permits a later authorized table deletion, ' +
+        'which destroys all stored student data. Disabling protection and ' +
+        'destructive operations require separate approval, and export and ' +
+        'verification must come first. Deletion protection is not a backup. ' +
+        'For production, use RemovalPolicy.RETAIN and configure backups.',
     );
 
     const teachersUserPool = new UserPool(this, 'TeachersUserPool', {

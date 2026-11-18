@@ -2,14 +2,13 @@
 
 **Статус:** P4-01 і P4-02 (P4-02.1–P4-02.4) реалізовано й перевірено локально;
 P4-02.5 security review — PASS. P4-03.1 documentation-only policy для даних,
-retention і recovery підготовлено локально; інфраструктурні зміни
-P4-03.2–P4-03.5 ще
-не реалізовані. У межах цих задач жодного AWS API-виклику, `cdk bootstrap`,
-`cdk diff`, `cdk deploy` або `cdk destroy` не виконувалося; AWS-ресурсів ще не
-створено. Quota snapshot у розділі 5 отриманий вручну поза цим workflow. Акаунт
-залишається на AWS Free Plan; реальні грошові витрати не передбачені, платні
-функції не вмикаються без окремого схвалення, але AWS credits можуть
-витрачатися.
+retention і recovery та P4-03.2 DynamoDB hardening реалізовано локально;
+інфраструктурні зміни P4-03.3–P4-03.5 ще не реалізовані. У межах цих задач
+жодного AWS API-виклику, `cdk bootstrap`, `cdk diff`, `cdk deploy` або
+`cdk destroy` не виконувалося; AWS-ресурсів ще не створено. Quota snapshot у
+розділі 5 отриманий вручну поза цим workflow. Акаунт залишається на AWS Free
+Plan; реальні грошові витрати не передбачені, платні функції не вмикаються без
+окремого схвалення, але AWS credits можуть витрачатися.
 
 Цей документ описує зафіксоване dev-середовище, локальні перевірки та безпечні
 кроки для майбутнього деплою. Він не є дозволом виконувати деплой: кожен
@@ -254,11 +253,15 @@ pnpm synth
 - `AWS::ApiGatewayV2::Stage` (`$default`, `AutoDeploy: true`, незмінний logical
   ID) з `DefaultRouteSettings`: `ThrottlingRateLimit: 10`,
   `ThrottlingBurstLimit: 20`;
+- `AWS::DynamoDB::Table` `StudentsTableDAB56938` з
+  `DeletionProtectionEnabled: true`, `OnDemandThroughput` 25/25,
+  `BillingMode: PAY_PER_REQUEST`, незмінними key schema/encryption і
+  `DeletionPolicy`/`UpdateReplacePolicy` `Delete`;
 - відсутність `ReservedConcurrentExecutions` у всіх `AWS::Lambda::Function`;
 - відсутність `AWS::Lambda::Version` і `AWS::Lambda::Alias` (provisioned
   concurrency не налаштована);
-- попередження CDK про `RemovalPolicy.DESTROY` для DynamoDB (очікувано для
-  навчального середовища);
+- попередження CDK про поєднання `RemovalPolicy.DESTROY` з увімкненим
+  deletion protection (очікувано для навчального середовища);
 - повідомлення про незадані feature flags (інформаційне).
 
 Перевірити назву стека без деплою:
@@ -382,19 +385,22 @@ pnpm synth
 
 - Невдале створення/оновлення CloudFormation зазвичай відкочується автоматично.
   Перевіряйте події стека в AWS Console або через CDK CLI.
-- `cdk destroy` є операцією знищення даних. Поточний стек (P4-03.1) має
-  `RemovalPolicy.DESTROY` і вимкнений deletion protection, тому всі записи
-  студентів буде втрачено. P4-03.2 має увімкнути deletion protection, не
-  змінюючи `DESTROY`; доки це не реалізовано, чинним є поточний стан. Перед
-  видаленням потрібен явний export/backup і ручне схвалення. Детальний
-  runbook — у розділі 13.
+- `cdk destroy` є операцією знищення даних. Локально синтезована конфігурація
+  P4-03.2 має `RemovalPolicy.DESTROY` і увімкнений deletion protection, тому
+  CloudFormation не зможе видалити таблицю, доки захист не вимкнено окремо
+  схваленим рішенням. `cdk destroy` або rollback може завершитися помилкою.
+  Вимкнення deletion protection не видаляє таблицю чи її записи; воно лише
+  дозволяє подальше авторизоване видалення таблиці, яке знищить усі записи
+  студентів. Вимкнення захисту та видалення таблиці потребують окремого
+  схвалення. Перед видаленням потрібен явний export/backup і перевірка його
+  повноти. Детальний runbook — у розділі 13.
 - Cognito User Pool має `RETAIN`; App Client і група `teachers` явного
   `RETAIN` не мають. Після видалення стека pool може залишитися, а повторний
   deploy створить нові Cognito-ресурси. Це треба враховувати під час cleanup.
 - Не запускайте `cdk destroy` на середовищі, де є дані, без окремого
   runbook і схвалення.
 
-## 9. Межі P4-01, P4-02 і P4-03.1
+## 9. Межі P4-01, P4-02, P4-03.1 і P4-03.2
 
 P4-01 не додає throttling, WAF, budgets, alarms, PITR, deletion protection, MFA
 або інші задачі Фази 4. P4-02.1 додає application-level request hardening для
@@ -410,8 +416,14 @@ behavior та IAM не змінювалися.
 
 P4-03.1 є documentation-only: він не змінює application code, CDK, IAM,
 DynamoDB, Cognito, tests, dependencies або lockfiles; не створює AWS-ресурсів і
-не виконує AWS API/CLI-викликів. Усі майбутні зміни P4-03.2–P4-03.5 потребують
-окремого схвалення.
+не виконує AWS API/CLI-викликів.
+
+P4-03.2 змінює лише властивості існуючої `StudentsTable` у
+`lib/struct-lab-stack.ts`: `deletionProtection: true`,
+`maxReadRequestUnits: 25`, `maxWriteRequestUnits: 25`. Application code,
+handlers, repository, Cognito, IAM, API contracts і Lambda environment не
+змінюються. Це локальна зміна; AWS deploy і throughput testing не виконувалися.
+Усі майбутні зміни P4-03.3–P4-03.5 потребують окремого схвалення.
 
 ## 10. Data governance (P4-03.1)
 
@@ -669,22 +681,20 @@ AWS-ресурси, нові IAM-права або S3 bucket не створюю
   Lambda, CloudFormation/CDK state або інші ресурси. Викладачів, клієнт, групу
   й інфраструктуру треба створювати заново за окремо схваленим runbook.
 
-## 13. Accidental deletion, rollback і deletion protection
+## 13. DynamoDB hardening, deletion protection і rollback
 
-### 13.1. Поточний і затверджений стан
+### 13.1. Поточний стан
 
-| Параметр | P4-03.1 (поточний стек) | Затверджено для P4-03.2 |
-| --- | --- | --- |
-| `RemovalPolicy` | `DESTROY` | `DESTROY` |
-| Deletion protection | вимкнено | увімкнено |
-| Max on-demand read | не задано | 25 RRU/s |
-| Max on-demand write | не задано | 25 WRU/s |
-| Encryption | AWS managed key | без змін |
-| PITR / AWS Backup / TTL | немає | deferred |
+Локально синтезована конфігурація P4-03.2 (AWS deploy не виконувався):
 
-Ці значення є **цільовими**. P4-03.1 не реалізує deletion protection або
-throughput caps і не змінює CDK-стек. До виконання P4-03.2 чинною є ліва
-колонка.
+| Параметр | Поточний стек |
+| --- | --- |
+| `RemovalPolicy` | `DESTROY` |
+| Deletion protection | увімкнено |
+| Max on-demand read | 25 RRU/s |
+| Max on-demand write | 25 WRU/s |
+| Encryption | AWS managed key |
+| PITR / AWS Backup / TTL | немає (deferred) |
 
 ### 13.2. Що робить і чого не робить deletion protection
 
@@ -697,15 +707,16 @@ throughput caps і не змінює CDK-стек. До виконання P4-03
 
 ### 13.3. Stack deletion і rollback
 
-- Із `RemovalPolicy.DESTROY` CloudFormation намагається викликати `DeleteTable`.
-  Якщо deletion protection увімкнений, видалення stack може завершитися
-  помилкою, доки захист не вимкнено.
+- Локально синтезована конфігурація P4-03.2 має `RemovalPolicy.DESTROY` і
+  увімкнений deletion protection. CloudFormation не може видалити таблицю, доки
+  захист не вимкнено, тому видалення stack може завершитися помилкою.
 - Rollback, який вимагає видалення або заміни таблиці, також може бути
   заблокований deletion protection.
 - Це очікуваний запобіжник. Не вимикайте захист автоматично і не додавайте
   обхідні шляхи в CDK.
-- Вимкнення deletion protection потребує окремого схвалення. Після вимкнення
-  захист більше не діє.
+- Вимкнення deletion protection потребує окремого схвалення. Воно не видаляє
+  таблицю чи записи, але дозволяє подальше авторизоване видалення таблиці, яке
+  знищить збережені записи студентів.
 - Невдалий початковий deploy може залишити stack у failed state і потребувати
   окремо схваленого ручного recovery.
 - Ніколи не видаляйте і не перестворюйте таблицю автоматично, щоб “обійти”
@@ -716,8 +727,25 @@ throughput caps і не змінює CDK-стек. До виконання P4-03
 1. Зробити export і перевірити його повноту.
 2. Переконатися, що export зашифрований і зберігається поза акаунтом.
 3. Отримати окреме схвалення на destructive operation.
-4. Лише після цього вимикати deletion protection або запускати `cdk destroy`.
+4. Лише після цього вимикати deletion protection і виконувати авторизоване
+   видалення таблиці або `cdk destroy`.
 5. Після операції перевірити фактичний стан ресурсів і зафіксувати результат.
+
+### 13.5. On-demand throughput limits
+
+- Максимум on-demand read — **25 RRU/s**, write — **25 WRU/s**.
+- Це request units, а не гарантована кількість API-запитів. Споживання залежить
+  від розміру item, типу операції та read consistency.
+- `Scan` може споживати кілька read request units за один API-запит.
+- Ліміти best-effort: burst capacity може тимчасово перевищувати їх.
+- Це не per-user quotas і не жорсткі spending caps.
+- API Gateway throttling (`10 req/s`, burst `20`) і Lambda concurrency — окремі
+  контролі.
+- DynamoDB throttling може проявлятися як наявні application error responses.
+  `POST /students` не можна автоматично retry-ити, бо idempotency не
+  реалізована. Існуюча AWS SDK retry behavior не змінюється.
+- Локальний synth підтверджує конфігурацію, але не фактичну поведінку під
+  навантаженням; throughput і throttling у AWS не тестувалися.
 
 ## 14. AWS Free Plan і cost constraints
 
@@ -732,8 +760,10 @@ throughput caps і не змінює CDK-стек. До виконання P4-03
 - Потрібні export-и треба створювати до втрати доступу.
 - DynamoDB storage, reads і writes, а також ручні export/restore можуть
   витрачати AWS credits.
-- P4-03.1 не додає PITR, AWS Backup, customer-managed KMS keys, WAF, budgets
-  або іншу платну інфраструктуру.
+- On-demand limits 25 RRU/s і 25 WRU/s не є hard spending caps і не гарантують
+  нульового споживання credits; вони обмежують request units best-effort.
+- P4-03.1 і P4-03.2 не додають PITR, AWS Backup, customer-managed KMS keys, WAF,
+  budgets або іншу платну інфраструктуру.
 - Paid Plan upgrade не передбачений.
 - AWS credits не є необмеженим безкоштовним використанням. Водночас документ не
   наводить цінових гарантій: фактичне споживання залежить від акаунта, регіону,
@@ -743,8 +773,8 @@ throughput caps і не змінює CDK-стек. До виконання P4-03
 
 ## 15. Future production requirements (out of scope)
 
-Наступні теми не входять у P4-03.1 і потребують окремого проєктування,
-privacy/security review і схвалення:
+Наступні теми не входять у P4-03.1 і P4-03.2 і потребують окремого
+проєктування, privacy/security review і схвалення:
 
 - обробка реальних персональних даних студентів;
 - production retention та erasure policy;
