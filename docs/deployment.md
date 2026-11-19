@@ -2,8 +2,9 @@
 
 **Статус:** P4-01 і P4-02 (P4-02.1–P4-02.4) реалізовано й перевірено локально;
 P4-02.5 security review — PASS. P4-03.1 documentation-only policy для даних,
-retention і recovery, P4-03.2 DynamoDB hardening та P4-03.3 Cognito lifecycle
-реалізовано локально; інфраструктурні зміни P4-03.4–P4-03.5 ще не реалізовані.
+retention і recovery, P4-03.2 DynamoDB hardening, P4-03.3 Cognito lifecycle та
+P4-03.4 Cognito Token Security реалізовано локально; інфраструктурні зміни
+P4-03.5 ще не реалізовані.
 У межах цих задач жодного AWS API-виклику, `cdk bootstrap`, `cdk diff`,
 `cdk deploy` або `cdk destroy` не виконувалося; AWS-ресурсів ще не створено і
 реальні Cognito users не створювалися. Quota snapshot у розділі 5 отриманий
@@ -79,6 +80,10 @@ AWS-крок потребує окремого ручного схвалення
     `RemovalPolicy.RETAIN`. App Client і група `teachers` зберігають типову
     поведінку видалення. Stack termination protection навмисно не ввімкнено.
     Деталі — в розділі 13.6.
+13. **Cognito token security.** Існуючий App Client має 15-хвилинний access
+    token, 7-денний refresh token і явно увімкнений token revocation.
+    Refresh-token rotation вимкнено, ID token validity не змінювалася.
+    Деталі та обмеження — в розділі 13.7.
 
 ### 2.1. Request hardening для `POST /students`
 
@@ -269,6 +274,13 @@ pnpm synth
 - `AWS::Cognito::UserPoolClient` `TeachersUserPoolTeachersAppClient7A8BA630` і
   `AWS::Cognito::UserPoolGroup` `TeachersUserPoolTeachersGroupABBE489E` без
   явних `DeletionPolicy`/`UpdateReplacePolicy` (типова поведінка — видалення);
+- App Client token settings: `AccessTokenValidity: 15`,
+  `RefreshTokenValidity: 10080` (7 днів у хвилинах, оскільки CDK L2 нормалізує
+  refresh validity до хвилин), `EnableTokenRevocation: true`,
+  `TokenValidityUnits: { AccessToken: minutes, RefreshToken: minutes }`;
+  `IdTokenValidity` і `RefreshTokenRotation` відсутні, `ExplicitAuthFlows`
+  зберігає `ALLOW_USER_SRP_AUTH` і `ALLOW_REFRESH_TOKEN_AUTH`,
+  `GenerateSecret: false`;
 - відсутність `ReservedConcurrentExecutions` у всіх `AWS::Lambda::Function`;
 - відсутність `AWS::Lambda::Version` і `AWS::Lambda::Alias` (provisioned
   concurrency не налаштована);
@@ -419,7 +431,7 @@ pnpm synth
 - Не запускайте `cdk destroy` на середовищі, де є дані, без окремого
   runbook і схвалення.
 
-## 9. Межі P4-01, P4-02, P4-03.1, P4-03.2 і P4-03.3
+## 9. Межі P4-01, P4-02, P4-03.1, P4-03.2, P4-03.3 і P4-03.4
 
 P4-01 не додає throttling, WAF, budgets, alarms, PITR, deletion protection, MFA
 або інші задачі Фази 4. P4-02.1 додає application-level request hardening для
@@ -446,10 +458,21 @@ handlers, repository, Cognito, IAM, API contracts і Lambda environment не
 P4-03.3 змінює лише властивості існуючого `TeachersUserPool`:
 `featurePlan: FeaturePlan.ESSENTIALS` і `deletionProtection: true`. Construct
 ID, logical ID, `RETAIN`, App Client і група `teachers`, naming, password
-policy, MFA, auth flows, 30-хвилинний access token, account recovery, JWT
-authorizer і exact `teachers` authorization не змінюються. Це локальна зміна;
-AWS deploy, автентифікація, lifecycle і recovery testing не виконувалися.
-Усі майбутні зміни P4-03.4–P4-03.5 потребують окремого схвалення.
+policy, MFA, auth flows, access token TTL, account recovery, JWT authorizer і
+exact `teachers` authorization не змінюються. Це локальна зміна; AWS deploy,
+автентифікація, lifecycle і recovery testing не виконувалися.
+
+P4-03.4 змінює лише token-властивості існуючого App Client:
+`accessTokenValidity: Duration.minutes(15)`,
+`refreshTokenValidity: Duration.days(7)` і `enableTokenRevocation: true`.
+Construct ID, logical ID, User Pool, група `teachers`, auth flows, password
+policy, MFA, account recovery, JWT authorizer і API contracts не змінюються.
+Refresh-token rotation, OAuth/Hosted UI, Cognito domain, identity providers,
+Lambda triggers і advanced security не вмикаються. ID token validity явно не
+задається, тому Cognito default (60 хвилин) зберігається. Це локальна зміна;
+AWS deploy і перевірка реальної token/revocation поведінки не виконувалися.
+
+Усі майбутні зміни P4-03.5 потребують окремого схвалення.
 
 ## 10. Data governance (P4-03.1)
 
@@ -814,6 +837,46 @@ Retained resources можуть залишитися й після failed deploy
 Звичайне успішне видалення stack не гарантоване, доки DynamoDB deletion
 protection залишається увімкненим (розділ 13.3).
 
+### 13.7. Cognito token security
+
+Локально синтезована конфігурація P4-03.4 (AWS deploy не виконувався):
+
+| Параметр CloudFormation | Значення | Примітка |
+| --- | --- | --- |
+| `AccessTokenValidity` | `15` | `TokenValidityUnits.AccessToken: minutes` |
+| `RefreshTokenValidity` | `10080` | 7 днів; `TokenValidityUnits.RefreshToken: minutes` |
+| `IdTokenValidity` | відсутній | Cognito default — 60 хвилин, не змінювався |
+| `EnableTokenRevocation` | `true` | явно увімкнено |
+| `RefreshTokenRotation` | відсутній | rotation вимкнено |
+| `ExplicitAuthFlows` | `ALLOW_USER_SRP_AUTH`, `ALLOW_REFRESH_TOKEN_AUTH` | без змін |
+| `GenerateSecret` | `false` | публічний client без secret |
+| `AllowedOAuthFlowsUserPoolClient` | `false` | OAuth/Hosted UI вимкнено |
+
+`refreshTokenValidity: Duration.days(7)` у CDK L2 синтезується як 10080 хвилин,
+а не як `7` з одиницею `days`. Це та сама 7-денна тривалість. CloudFormation
+overrides не використовувалися.
+
+Обмеження та поведінка:
+
+- Token revocation має бути увімкнений для App Client; у цій конфігурації він
+  увімкнений явно.
+- Відкликання refresh token може унеможливити його подальше використання.
+  Конкретна поведінка залежить від Cognito і клієнтського flow.
+- Revocation **не гарантує** негайного відхилення вже виданого й не простроченого
+  JWT на рівні API Gateway JWT authorizer. Authorizer перевіряє підпис, issuer,
+  audience і строк дії, але не звертається до revocation list.
+- Коротший 15-хвилинний access token зменшує максимальне вікно, протягом якого
+  такий token може залишатися дійсним.
+- Frontend authentication і token-refresh logic у P4-03.4 не змінювалися.
+  Існуючу frontend-інтеграцію треба перевірити окремо до deployment.
+- Після завершення refresh token користувачу може знадобитися повторний sign-in.
+- Зменшення refresh token validity до 7 днів не скорочує заднім числом уже видані
+  refresh tokens; нова тривалість застосовується до токенів, виданих після
+  deployment нової конфігурації.
+- Локальний synth підтверджує лише конфігурацію, а не фактичну Cognito
+  authentication, expiration або revocation поведінку.
+- Ресурсний склад стека не змінився: 25 ресурсів, як і до P4-03.4.
+
 ## 14. AWS Free Plan і cost constraints
 
 - Dev-середовище тимчасове й призначене лише для розробки.
@@ -834,11 +897,11 @@ protection залишається увімкненим (розділ 13.3).
   billing конкретного акаунта треба перевірити до deployment. Retained User Pool
   і users залишаються subject to AWS account lifecycle і applicable pricing;
   credits і free allowances не є необмеженими.
-- P4-03.3 не вмикає Cognito Plus, advanced security/threat protection, SMS або
-  email MFA, managed login/Hosted UI, OAuth flows, Cognito domains, зовнішні
-  identity providers, Lambda triggers, custom messaging, customer-managed KMS
-  keys або SNS/SES infrastructure.
-- P4-03.1–P4-03.3 не додають PITR, AWS Backup, customer-managed KMS keys, WAF,
+- P4-03.3 і P4-03.4 не вмикають Cognito Plus, advanced security/threat
+  protection, SMS або email MFA, managed login/Hosted UI, OAuth flows, Cognito
+  domains, зовнішні identity providers, Lambda triggers, custom messaging,
+  customer-managed KMS keys або SNS/SES infrastructure.
+- P4-03.1–P4-03.4 не додають PITR, AWS Backup, customer-managed KMS keys, WAF,
   budgets або іншу платну інфраструктуру.
 - Paid Plan upgrade не передбачений.
 - AWS credits не є необмеженим безкоштовним використанням. Водночас документ не
@@ -849,7 +912,7 @@ protection залишається увімкненим (розділ 13.3).
 
 ## 15. Future production requirements (out of scope)
 
-Наступні теми не входять у P4-03.1–P4-03.3 і потребують окремого
+Наступні теми не входять у P4-03.1–P4-03.4 і потребують окремого
 проєктування, privacy/security review і схвалення:
 
 - обробка реальних персональних даних студентів;

@@ -168,14 +168,19 @@ export class StructLabStack extends Stack {
     });
 
     // Exactly one public client (no secret). OAuth/Hosted UI is disabled
-    // because this phase defines no callback URLs or domain.
+    // because this phase defines no callback URLs or domain. Access tokens are
+    // short-lived, refresh tokens last one week, and refresh-token rotation is
+    // intentionally left disabled. The ID token validity is not set here, so
+    // the Cognito default (60 minutes) remains unchanged.
     const teachersAppClient = teachersUserPool.addClient('TeachersAppClient', {
       generateSecret: false,
       disableOAuth: true,
       authFlows: {
         userSrp: true,
       },
-      accessTokenValidity: Duration.minutes(30),
+      accessTokenValidity: Duration.minutes(15),
+      refreshTokenValidity: Duration.days(7),
+      enableTokenRevocation: true,
     });
 
     teachersUserPool.addGroup('TeachersGroup', {

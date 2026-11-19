@@ -75,6 +75,13 @@ interface UserPoolClientResource {
     UserPoolId?: unknown;
     ExplicitAuthFlows?: string[];
     AccessTokenValidity?: number;
+    IdTokenValidity?: number;
+    RefreshTokenValidity?: number;
+    EnableTokenRevocation?: boolean;
+    RefreshTokenRotation?: {
+      RefreshTokenRotationType?: string;
+      Feature?: string;
+    };
     TokenValidityUnits?: {
       AccessToken?: string;
       IdToken?: string;
@@ -307,6 +314,39 @@ describe('StructLabStack', () => {
     }
   });
 
+  it('keeps the baseline synthesized resource inventory unchanged', () => {
+    const resources = template.toJSON().Resources as Record<
+      string,
+      { Type: string }
+    >;
+
+    // `Template.fromStack` omits the `AWS::CDK::Metadata` resource that appears
+    // in the synthesized `cdk.out` template, so this inventory has 24 entries
+    // instead of the 25 resources reported by `cdk synth`.
+    expect(Object.keys(resources)).toHaveLength(24);
+
+    const counts: Record<string, number> = {};
+    for (const resource of Object.values(resources)) {
+      counts[resource.Type] = (counts[resource.Type] ?? 0) + 1;
+    }
+
+    expect(counts).toEqual({
+      'AWS::ApiGatewayV2::Api': 1,
+      'AWS::ApiGatewayV2::Authorizer': 1,
+      'AWS::ApiGatewayV2::Integration': 3,
+      'AWS::ApiGatewayV2::Route': 3,
+      'AWS::ApiGatewayV2::Stage': 1,
+      'AWS::Cognito::UserPool': 1,
+      'AWS::Cognito::UserPoolClient': 1,
+      'AWS::Cognito::UserPoolGroup': 1,
+      'AWS::DynamoDB::Table': 1,
+      'AWS::IAM::Policy': 2,
+      'AWS::IAM::Role': 3,
+      'AWS::Lambda::Function': 3,
+      'AWS::Lambda::Permission': 3,
+    });
+  });
+
   it('rejects a conflicting explicit environment', () => {
     const app = new App();
 
@@ -488,10 +528,17 @@ describe('StructLabStack', () => {
       'ALLOW_USER_SRP_AUTH',
       'ALLOW_REFRESH_TOKEN_AUTH',
     ]);
-    expect(client.Properties?.AccessTokenValidity).toBe(30);
+    expect(client.Properties?.AccessTokenValidity).toBe(15);
+    // CDK L2 normalizes refresh-token validity to minutes, so seven days is
+    // synthesized as 10080 minutes rather than `7` with a `days` unit.
+    expect(client.Properties?.RefreshTokenValidity).toBe(7 * 24 * 60);
+    expect(client.Properties?.IdTokenValidity).toBeUndefined();
     expect(client.Properties?.TokenValidityUnits).toEqual({
       AccessToken: 'minutes',
+      RefreshToken: 'minutes',
     });
+    expect(client.Properties?.EnableTokenRevocation).toBe(true);
+    expect(client.Properties?.RefreshTokenRotation).toBeUndefined();
     expect(client.Properties?.AllowedOAuthFlowsUserPoolClient).toBe(false);
     expect(client.Properties?.AllowedOAuthFlows).toBeUndefined();
     expect(client.Properties?.AllowedOAuthScopes).toBeUndefined();
