@@ -2,9 +2,10 @@
 
 **Статус:** P4-01 і P4-02 (P4-02.1 request hardening, P4-02.2 CORS, P4-02.3
 throttling і P4-02.4 concurrency awareness) реалізовано й перевірено локально;
-P4-02.5 security review — PASS. Наступна запланована задача — P4-03. AWS-деплой
-ще не виконувався, тому реальної базової URL-адреси поки немає. Після деплою її
-треба взяти зі stack output `HttpApiUrl`.
+P4-02.5 security review — PASS. P4-03.4 Cognito Token Security реалізовано
+локально, але AWS-деплой ще не виконувався, тому реальної базової URL-адреси
+поки немає. Після деплою її треба взяти зі stack output `HttpApiUrl`. Поведінка
+frontend authentication і token-refresh окремо не перевірялася.
 
 Цей документ описує лише те, що реально реалізовано в коді. Він не додає
 endpoint-ів, полів або поведінки, яких немає в backend.
@@ -57,9 +58,12 @@ endpoint-ів, полів або поведінки, яких немає в back
 | App Client secret | відсутній (публічний клієнт) |
 | Self-sign-up | вимкнено |
 | Створення акаунтів | лише адміністратором User Pool |
-| Auth flow | SRP |
+| Auth flow | SRP (`ALLOW_USER_SRP_AUTH`) + refresh token (`ALLOW_REFRESH_TOKEN_AUTH`) |
 | OAuth / Hosted UI | вимкнено |
-| Access token | 30 хвилин |
+| Access token | 15 хвилин |
+| Refresh token | 7 днів |
+| Refresh-token rotation | вимкнено |
+| Token revocation | увімкнено для App Client |
 | Група доступу | `teachers` |
 | Username | фактичний username акаунта; email не є alias автоматично |
 
@@ -139,15 +143,20 @@ token.
 
 ### 2.4. Термін дії та відновлення сесії
 
-- Access token діє 30 хвилин.
+- Access token діє 15 хвилин.
+- Refresh token діє 7 днів; refresh-token rotation вимкнено.
 - Backend не має власного endpoint-а refresh або logout.
 - Оновлення токена виконує Cognito SDK на фронтенді.
 - Після `401` слід спробувати оновити сесію, а якщо це неможливо — повернути
   викладача на екран входу.
+- Після завершення refresh token користувачу може знадобитися повторний вхід.
 - Після зміни групи в Cognito вже виданий access token може містити старі групи
   до завершення терміну дії. Потрібен новий токен.
 - Вихід із фронтенду не відкликає вже виданий access token. Не зберігайте токени
   довше, ніж потрібно, і не логуйте їх.
+- Ці token settings реалізовані локально, але не задеплоєні в AWS. Frontend
+  authentication і token-refresh behavior окремо не перевірялися; існуючу
+  інтеграцію треба перевірити до deployment.
 
 ### 2.5. Заголовок авторизації
 
