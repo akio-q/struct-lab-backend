@@ -4,6 +4,7 @@ export const DEFAULT_PAGE_LIMIT = 20;
 export const MAX_PAGE_LIMIT = 100;
 export const MAX_FULL_NAME_LENGTH = 200;
 export const MAX_GROUP_LENGTH = 50;
+export const MAX_CREATE_STUDENT_BODY_BYTES = 4096;
 
 export type ValidationResult<T> =
   | { ok: true; value: T }

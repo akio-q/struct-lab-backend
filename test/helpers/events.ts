@@ -9,6 +9,8 @@ export const TEACHER_ACCESS_CLAIMS: Record<string, unknown> = {
 /**
  * Creates a minimal API Gateway HTTP API event for handler tests. Only the
  * fields used by our handlers need to be meaningful; the rest are omitted.
+ * The default header models the documented JSON request contract. Tests that
+ * exercise missing or invalid headers override `headers` explicitly.
  */
 export const createApiEvent = (
   overrides: Partial<APIGatewayProxyEventV2> = {},
@@ -16,6 +18,7 @@ export const createApiEvent = (
   ({
     body: undefined,
     isBase64Encoded: false,
+    headers: { 'content-type': 'application/json' },
     queryStringParameters: undefined,
     ...overrides,
   }) as APIGatewayProxyEventV2;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  MAX_CREATE_STUDENT_BODY_BYTES,
   MAX_FULL_NAME_LENGTH,
   MAX_GROUP_LENGTH,
   MAX_PAGE_LIMIT,
@@ -33,6 +34,17 @@ describe('parseCreateStudentInput', () => {
     );
 
     expect(result.ok).toBe(true);
+  });
+
+  it('keeps the maximum valid payload below the request size limit', () => {
+    const body = JSON.stringify({
+      fullName: 'ї'.repeat(MAX_FULL_NAME_LENGTH),
+      group: 'ї'.repeat(MAX_GROUP_LENGTH),
+    });
+
+    expect(Buffer.byteLength(body, 'utf8')).toBeLessThan(
+      MAX_CREATE_STUDENT_BODY_BYTES,
+    );
   });
 
   it.each([

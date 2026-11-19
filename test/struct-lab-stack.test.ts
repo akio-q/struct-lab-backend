@@ -2,6 +2,7 @@ import { App } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { DEV_ENVIRONMENT } from '../lib/environments';
 import { StructLabStack } from '../lib/struct-lab-stack';
 
 interface LambdaResource {
@@ -10,6 +11,7 @@ interface LambdaResource {
     Runtime?: string;
     Handler?: string;
     MemorySize?: number;
+    ReservedConcurrentExecutions?: number;
     Environment?: {
       Variables?: Record<string, unknown>;
     };
@@ -46,9 +48,13 @@ interface UserPoolResource {
   DeletionPolicy?: string;
   UpdateReplacePolicy?: string;
   Properties?: {
+    UserPoolTier?: string;
+    DeletionProtection?: string;
     AdminCreateUserConfig?: {
       AllowAdminCreateUserOnly?: boolean;
     };
+    MfaConfiguration?: string;
+    LambdaConfig?: unknown;
     Policies?: {
       PasswordPolicy?: {
         MinimumLength?: number;
@@ -62,6 +68,8 @@ interface UserPoolResource {
 }
 
 interface UserPoolClientResource {
+  DeletionPolicy?: string;
+  UpdateReplacePolicy?: string;
   Properties?: {
     GenerateSecret?: boolean;
     UserPoolId?: unknown;
@@ -82,6 +90,8 @@ interface UserPoolClientResource {
 }
 
 interface UserPoolGroupResource {
+  DeletionPolicy?: string;
+  UpdateReplacePolicy?: string;
   Properties?: {
     GroupName?: string;
     UserPoolId?: unknown;
@@ -99,16 +109,88 @@ interface AuthorizerResource {
   };
 }
 
+interface HttpApiResource {
+  Properties?: {
+    CorsConfiguration?: {
+      AllowCredentials?: boolean;
+      AllowHeaders?: string[];
+      AllowMethods?: string[];
+      AllowOrigins?: string[];
+      MaxAge?: number;
+    };
+  };
+}
+
+interface StageResource {
+  Properties?: {
+    StageName?: string;
+    AutoDeploy?: boolean;
+    DefaultRouteSettings?: {
+      ThrottlingBurstLimit?: number;
+      ThrottlingRateLimit?: number;
+    };
+    RouteSettings?: unknown;
+  };
+}
+
+interface DynamoTableResource {
+  DeletionPolicy?: string;
+  UpdateReplacePolicy?: string;
+  Properties?: {
+    BillingMode?: string;
+    DeletionProtectionEnabled?: boolean;
+    OnDemandThroughput?: {
+      MaxReadRequestUnits?: number;
+      MaxWriteRequestUnits?: number;
+    };
+    KeySchema?: Array<{
+      AttributeName?: string;
+      KeyType?: string;
+    }>;
+    AttributeDefinitions?: Array<{
+      AttributeName?: string;
+      AttributeType?: string;
+    }>;
+    SSESpecification?: {
+      SSEEnabled?: boolean;
+      SSEType?: string;
+      KMSMasterKeyId?: unknown;
+    };
+    PointInTimeRecoverySpecification?: unknown;
+    StreamSpecification?: unknown;
+    TimeToLiveSpecification?: unknown;
+    GlobalSecondaryIndexes?: unknown;
+    Replicas?: unknown;
+    ProvisionedThroughput?: unknown;
+    WarmThroughput?: unknown;
+  };
+}
+
+interface TagPair {
+  Key?: string;
+  Value?: string;
+}
+
+interface TaggableResource {
+  Properties?: {
+    Tags?: TagPair[] | Record<string, string>;
+    UserPoolTags?: Record<string, string>;
+  };
+}
+
 const CREATE_DESCRIPTION = 'Creates a student in DynamoDB';
 const LIST_DESCRIPTION =
   'Lists students with cursor-based pagination (teacher-only)';
 
 describe('StructLabStack', () => {
+  let stack: StructLabStack;
   let template: Template;
 
   beforeAll(() => {
     const app = new App();
-    const stack = new StructLabStack(app, 'TestStack');
+    stack = new StructLabStack(app, 'TestStack', {
+      environment: DEV_ENVIRONMENT,
+    });
 
     template = Template.fromStack(stack);
   }, 60_000);
@@ -183,21 +265,123 @@ describe('StructLabStack', () => {
       .filter((routeKey): routeKey is string => typeof routeKey === 'string')
       .sort();
 
-  it('creates the Students table with on-demand billing and encryption', () => {
+  const getTags = (resource: TaggableResource): Record<string, string> => {
+    const tags = resource.Properties?.Tags;
+
+    if (Array.isArray(tags)) {
+      const result: Record<string, string> = {};
+
+      for (const tag of tags) {
+        if (tag.Key !== undefined) {
+          result[tag.Key] = tag.Value ?? '';
+        }
+      }
+
+      return result;
+    }
+
+    return tags ?? resource.Properties?.UserPoolTags ?? {};
+  };
+
+  it('pins the dev AWS account, region, and stack name', () => {
+    expect(stack.account).toBe('677339799150');
+    expect(stack.region).toBe('eu-north-1');
+    expect(stack.stackName).toBe('StructLabBackendStack-dev');
+  });
+
+  it('applies dev environment tags to taggable resources', () => {
+    for (const type of [
+      'AWS::DynamoDB::Table',
+      'AWS::Cognito::UserPool',
+      'AWS::Lambda::Function',
+      'AWS::ApiGatewayV2::Api',
+      'AWS::ApiGatewayV2::Stage',
+    ]) {
+      const resources = Object.values(getResources<TaggableResource>(type));
+
+      expect(resources.length).toBeGreaterThan(0);
+
+      for (const resource of resources) {
+        expect(getTags(resource)).toMatchObject(DEV_ENVIRONMENT.tags);
+      }
+    }
+  });
+
+  it('rejects a conflicting explicit environment', () => {
+    const app = new App();
+
+    expect(
+      () =>
+        new StructLabStack(app, 'ConflictingEnvironmentStack', {
+          environment: DEV_ENVIRONMENT,
+          env: {
+            account: '123456789012',
+            region: 'us-east-1',
+          },
+        }),
+    ).toThrow(/must target 677339799150\/eu-north-1/);
+  });
+
+  it('rejects a conflicting stack name', () => {
+    const app = new App();
+
+    expect(
+      () =>
+        new StructLabStack(app, 'ConflictingStackNameStack', {
+          environment: DEV_ENVIRONMENT,
+          stackName: 'SomeOtherStack',
+        }),
+    ).toThrow(/must use stack name StructLabBackendStack-dev/);
+  });
+
+  it('hardens the existing Students table without changing its identity', () => {
     template.resourceCountIs('AWS::DynamoDB::Table', 1);
-    template.hasResource('AWS::DynamoDB::Table', {
-      DeletionPolicy: 'Delete',
-      UpdateReplacePolicy: 'Delete',
-      Properties: {
-        BillingMode: 'PAY_PER_REQUEST',
-        KeySchema: [{ AttributeName: 'studentId', KeyType: 'HASH' }],
-        AttributeDefinitions: [
-          { AttributeName: 'studentId', AttributeType: 'S' },
-        ],
-        SSESpecification: { SSEEnabled: true },
-        DeletionProtectionEnabled: false,
-      },
+
+    const [logicalId, table] = getSingleResource<DynamoTableResource>(
+      'AWS::DynamoDB::Table',
+    );
+
+    expect(logicalId).toBe('StudentsTableDAB56938');
+    expect(table.DeletionPolicy).toBe('Delete');
+    expect(table.UpdateReplacePolicy).toBe('Delete');
+    expect(table.Properties?.BillingMode).toBe('PAY_PER_REQUEST');
+    expect(table.Properties?.DeletionProtectionEnabled).toBe(true);
+    expect(table.Properties?.OnDemandThroughput).toEqual({
+      MaxReadRequestUnits: 25,
+      MaxWriteRequestUnits: 25,
     });
+    expect(table.Properties?.KeySchema).toEqual([
+      { AttributeName: 'studentId', KeyType: 'HASH' },
+    ]);
+    expect(table.Properties?.AttributeDefinitions).toEqual([
+      { AttributeName: 'studentId', AttributeType: 'S' },
+    ]);
+    expect(table.Properties?.SSESpecification).toEqual({ SSEEnabled: true });
+  });
+
+  it('does not enable deferred DynamoDB features or add resources', () => {
+    const [, table] = getSingleResource<DynamoTableResource>(
+      'AWS::DynamoDB::Table',
+    );
+
+    expect(table.Properties?.PointInTimeRecoverySpecification).toBeUndefined();
+    expect(table.Properties?.StreamSpecification).toBeUndefined();
+    expect(table.Properties?.TimeToLiveSpecification).toBeUndefined();
+    expect(table.Properties?.GlobalSecondaryIndexes).toBeUndefined();
+    expect(table.Properties?.Replicas).toBeUndefined();
+    expect(table.Properties?.ProvisionedThroughput).toBeUndefined();
+    expect(table.Properties?.WarmThroughput).toBeUndefined();
+    expect(table.Properties?.SSESpecification?.KMSMasterKeyId).toBeUndefined();
+
+    for (const type of [
+      'AWS::Backup::BackupPlan',
+      'AWS::Backup::BackupVault',
+      'AWS::DynamoDB::GlobalTable',
+      'AWS::KMS::Key',
+      'AWS::Lambda::EventSourceMapping',
+    ]) {
+      template.resourceCountIs(type, 0);
+    }
   });
 
   it('creates exactly three Node.js Lambda functions', () => {
@@ -261,12 +445,15 @@ describe('StructLabStack', () => {
   it('creates exactly one locked-down Cognito user pool', () => {
     template.resourceCountIs('AWS::Cognito::UserPool', 1);
 
-    const [, userPool] = getSingleResource<UserPoolResource>(
+    const [poolLogicalId, userPool] = getSingleResource<UserPoolResource>(
       'AWS::Cognito::UserPool',
     );
 
+    expect(poolLogicalId).toBe('TeachersUserPoolA87A0CBA');
     expect(userPool.DeletionPolicy).toBe('Retain');
     expect(userPool.UpdateReplacePolicy).toBe('Retain');
+    expect(userPool.Properties?.UserPoolTier).toBe('ESSENTIALS');
+    expect(userPool.Properties?.DeletionProtection).toBe('ACTIVE');
     expect(
       userPool.Properties?.AdminCreateUserConfig?.AllowAdminCreateUserOnly,
     ).toBe(true);
@@ -277,6 +464,8 @@ describe('StructLabStack', () => {
       RequireNumbers: true,
       RequireSymbols: true,
     });
+    expect(userPool.Properties?.MfaConfiguration).toBeUndefined();
+    expect(userPool.Properties?.LambdaConfig).toBeUndefined();
   });
 
   it('creates exactly one public app client with minimal auth flows', () => {
@@ -286,10 +475,13 @@ describe('StructLabStack', () => {
     const [poolLogicalId] = getSingleResource<UserPoolResource>(
       'AWS::Cognito::UserPool',
     );
-    const [, client] = getSingleResource<UserPoolClientResource>(
+    const [clientLogicalId, client] = getSingleResource<UserPoolClientResource>(
       'AWS::Cognito::UserPoolClient',
     );
 
+    expect(clientLogicalId).toBe('TeachersUserPoolTeachersAppClient7A8BA630');
+    expect(client.DeletionPolicy).toBeUndefined();
+    expect(client.UpdateReplacePolicy).toBeUndefined();
     expect(client.Properties?.GenerateSecret).toBe(false);
     expect(client.Properties?.UserPoolId).toEqual({ Ref: poolLogicalId });
     expect(client.Properties?.ExplicitAuthFlows).toEqual([
@@ -316,12 +508,35 @@ describe('StructLabStack', () => {
     const [poolLogicalId] = getSingleResource<UserPoolResource>(
       'AWS::Cognito::UserPool',
     );
-    const [, group] = getSingleResource<UserPoolGroupResource>(
+    const [groupLogicalId, group] = getSingleResource<UserPoolGroupResource>(
       'AWS::Cognito::UserPoolGroup',
     );
 
+    expect(groupLogicalId).toBe('TeachersUserPoolTeachersGroupABBE489E');
+    expect(group.DeletionPolicy).toBeUndefined();
+    expect(group.UpdateReplacePolicy).toBeUndefined();
     expect(group.Properties?.GroupName).toBe('teachers');
     expect(group.Properties?.UserPoolId).toEqual({ Ref: poolLogicalId });
+  });
+
+  it('does not add deferred Cognito resources or integrations', () => {
+    const [, userPool] = getSingleResource<UserPoolResource>(
+      'AWS::Cognito::UserPool',
+    );
+
+    expect(userPool.Properties?.LambdaConfig).toBeUndefined();
+
+    for (const type of [
+      'AWS::Cognito::UserPoolDomain',
+      'AWS::Cognito::UserPoolIdentityProvider',
+      'AWS::Cognito::IdentityPool',
+      'AWS::SNS::Topic',
+      'AWS::SNS::Subscription',
+      'AWS::SES::ConfigurationSet',
+      'AWS::SES::EmailIdentity',
+    ]) {
+      template.resourceCountIs(type, 0);
+    }
   });
 
   it('creates one JWT authorizer for the app client and user pool', () => {
@@ -348,9 +563,7 @@ describe('StructLabStack', () => {
       'Fn::Join': [
         '',
         [
-          'https://cognito-idp.',
-          { Ref: 'AWS::Region' },
-          '.amazonaws.com/',
+          'https://cognito-idp.eu-north-1.amazonaws.com/',
           { Ref: poolLogicalId },
         ],
       ],
@@ -395,6 +608,65 @@ describe('StructLabStack', () => {
       .sort();
 
     expect(publicRouteKeys).toEqual(['GET /health', 'POST /students']);
+  });
+
+  it('configures native CORS for the approved Next.js dev origin', () => {
+    template.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
+
+    const [, api] = getSingleResource<HttpApiResource>(
+      'AWS::ApiGatewayV2::Api',
+    );
+
+    expect(api.Properties?.CorsConfiguration).toEqual({
+      AllowCredentials: false,
+      AllowHeaders: ['content-type', 'authorization'],
+      AllowMethods: ['GET', 'POST'],
+      AllowOrigins: ['http://localhost:3000'],
+      MaxAge: 300,
+    });
+    expect(api.Properties?.CorsConfiguration?.AllowOrigins).toEqual([
+      ...DEV_ENVIRONMENT.corsAllowedOrigins,
+    ]);
+  });
+
+  it('does not add an explicit OPTIONS preflight route', () => {
+    expect(
+      getRouteKeys().filter((routeKey) => routeKey.startsWith('OPTIONS ')),
+    ).toEqual([]);
+  });
+
+  it('applies throttling to the existing default stage', () => {
+    template.resourceCountIs('AWS::ApiGatewayV2::Stage', 1);
+
+    const [stageLogicalId, stage] = getSingleResource<StageResource>(
+      'AWS::ApiGatewayV2::Stage',
+    );
+
+    expect(stageLogicalId).toBe('HttpApiDefaultStage3EEB07D6');
+    expect(stage.Properties?.StageName).toBe('$default');
+    expect(stage.Properties?.AutoDeploy).toBe(true);
+    expect(stage.Properties?.DefaultRouteSettings).toEqual({
+      ThrottlingBurstLimit: 20,
+      ThrottlingRateLimit: 10,
+    });
+    expect(stage.Properties?.RouteSettings).toBeUndefined();
+  });
+
+  it('does not configure Lambda reserved concurrency', () => {
+    const lambdas = Object.values(
+      getResources<LambdaResource>('AWS::Lambda::Function'),
+    );
+
+    expect(lambdas).toHaveLength(3);
+
+    for (const lambda of lambdas) {
+      expect(lambda.Properties?.ReservedConcurrentExecutions).toBeUndefined();
+    }
+  });
+
+  it('does not create Lambda versions or aliases for provisioned concurrency', () => {
+    template.resourceCountIs('AWS::Lambda::Version', 0);
+    template.resourceCountIs('AWS::Lambda::Alias', 0);
   });
 
   it('does not grant Cognito permissions to Lambda roles', () => {

@@ -1,8 +1,10 @@
 # Frontend Integration Contract
 
-**Статус:** контракт відповідає реалізованому backend Фази 3. AWS-деплой ще не
-виконувався, тому реальної базової URL-адреси поки немає. Після деплою її треба
-взяти зі stack output `HttpApiUrl`.
+**Статус:** P4-01 і P4-02 (P4-02.1 request hardening, P4-02.2 CORS, P4-02.3
+throttling і P4-02.4 concurrency awareness) реалізовано й перевірено локально;
+P4-02.5 security review — PASS. Наступна запланована задача — P4-03. AWS-деплой
+ще не виконувався, тому реальної базової URL-адреси поки немає. Після деплою її
+треба взяти зі stack output `HttpApiUrl`.
 
 Цей документ описує лише те, що реально реалізовано в коді. Він не додає
 endpoint-ів, полів або поведінки, яких немає в backend.
@@ -14,6 +16,15 @@ endpoint-ів, полів або поведінки, яких немає в back
   `https://<api-id>.execute-api.<region>.amazonaws.com`.
 - Шляхи вказуються без завершального слеша: `/students`, `/admin/students`.
 - Для запитів із тілом надсилайте `Content-Type: application/json`.
+  `POST /students` приймає щонайбільше 4096 decoded bytes; інакше — `413` або
+  `415`.
+- Cross-origin запити дозволені лише з `http://localhost:3000` (локальний
+  Next.js). Preflight обробляє API Gateway; див. розділ 7.
+- API Gateway обмежує `$default` stage до 10 req/s і burst 20. Перевищення
+  повертає `429 Too Many Requests`; див. розділ 8.
+- Для admin-запитів передавайте access token у
+  `Authorization: Bearer <accessToken>`. Cross-origin cookies не
+  використовуються.
 - Прикладні помилки мають форму:
 
 ```json
@@ -186,6 +197,18 @@ Content-Type: application/json
 }
 ```
 
+`Content-Type: application/json` обов'язковий. Допускається параметр
+`charset`, наприклад `application/json; charset=utf-8`; регістр назви заголовка
+й media type не має значення.
+
+Максимальний розмір тіла — **4096 decoded bytes**. Для UTF-8 рахуються байти,
+а не JavaScript-довжина рядка; для base64 тіло спершу декодується. Перевірки
+виконуються в порядку: `Content-Type` → розмір тіла → JSON parsing → валідація
+полів → запис у DynamoDB.
+
+Це **application-level** обмеження. API Gateway усе одно приймає більші payload
+до platform limits; це не edge-level захист, не WAF і не anti-spam механізм.
+
 TypeScript-тип:
 
 ```ts
@@ -199,14 +222,17 @@ interface CreateStudentRequest {
 
 Сервер застосовує правила до кожного запиту:
 
-1. Тіло обов'язкове, непорожнє і має бути валідним JSON.
-2. JSON має бути об'єктом, не масивом, рядком або `null`.
-3. `fullName` має бути рядком. Пробіли на початку й у кінці обрізаються; після
+1. `Content-Type` має бути `application/json` (з опційним `charset`), інакше
+   `415`.
+2. Тіло не має перевищувати 4096 decoded bytes, інакше `413`.
+3. Тіло обов'язкове, непорожнє і має бути валідним JSON.
+4. JSON має бути об'єктом, не масивом, рядком або `null`.
+5. `fullName` має бути рядком. Пробіли на початку й у кінці обрізаються; після
    цього довжина — від 1 до 200 символів.
-4. `group` має бути рядком. Пробіли на початку й у кінці обрізаються; після
+6. `group` має бути рядком. Пробіли на початку й у кінці обрізаються; після
    цього довжина — від 1 до 50 символів.
-5. Зайві поля ігноруються.
-6. `studentId` і `createdAt` клієнт задати не може: сервер генерує їх сам.
+7. Зайві поля ігноруються, але враховуються в розмірі тіла.
+8. `studentId` і `createdAt` клієнт задати не може: сервер генерує їх сам.
 
 Frontend може дублювати ці правила для зручності користувача, але саме серверна
 валідація є джерелом істини.
@@ -244,7 +270,28 @@ DynamoDB.
 рендеринг фреймворку або явне escape/output encoding. Інакше можливий stored
 XSS в admin-інтерфейсі викладача.
 
-### 4.4. Помилки `400`
+### 4.4. Помилки `413` і `415`
+
+`415 Unsupported Media Type`:
+
+```json
+{
+  "error": "Content-Type must be application/json"
+}
+```
+
+`413 Payload Too Large`:
+
+```json
+{
+  "error": "Request body must be at most 4096 bytes"
+}
+```
+
+Для обох помилок запис у DynamoDB не створюється, а тіло запиту не логується.
+Повторювати запит без виправлення `Content-Type` або зменшення тіла немає сенсу.
+
+### 4.5. Помилки `400`
 
 Відповідь:
 
@@ -269,7 +316,7 @@ XSS в admin-інтерфейсі викладача.
 `400` означає, що запис не створено; повторювати той самий запит без
 виправлення немає сенсу.
 
-### 4.5. Помилка `500`
+### 4.6. Помилка `500`
 
 ```json
 {
@@ -277,12 +324,18 @@ XSS в admin-інтерфейсі викладача.
 }
 ```
 
-Це може бути помилка DynamoDB або ініціалізації Lambda. Деталі навмисно не
-розкриваються.
+Це може бути помилка DynamoDB, ініціалізації Lambda або gateway-generated `500`
+від Lambda throttling. Така відповідь може не мати звичайної JSON-структури
+застосунку; деталі внутрішніх помилок навмисно не розкриваються.
 
-**Важливо:** у `POST /students` немає idempotency key. Якщо клієнт не отримав
-відповідь через мережеву помилку, а запис уже створився, повторний POST створить
-дублікат. Автоматичний retry слід робити обережно.
+Gateway-generated помилки, зокрема `500` від Lambda throttling, можуть не
+містити CORS-заголовків. У браузері це може виглядати як мережева помилка, а не
+як HTTP `500`.
+
+**Важливо:** у `POST /students` немає idempotency key. Не робіть автоматичний
+retry `POST /students` після `500`, `429`, таймауту або мережевої помилки:
+повторний запит може створити дублікат. Повторюйте лише після підтвердження
+користувача.
 
 ## 5. `GET /admin/students`
 
@@ -414,10 +467,12 @@ const fetchAllStudents = async (accessToken: string): Promise<Student[]> => {
 
 Можливі причини:
 
-- відсутній заголовок `Authorization`;
-- токен невалідний, прострочений або має неправильний підпис;
-- токен виданий не для цього User Pool або App Client;
-- у Lambda потрапив ID token або інший `token_use`, відмінний від `access`.
+- API Gateway відхиляє запит, якщо:
+  - відсутній заголовок `Authorization`;
+  - токен невалідний, прострочений або має неправильний підпис;
+  - токен виданий не для цього User Pool або App Client.
+- Lambda повертає `401`, якщо JWT валідний, але це ID token або інший
+  `token_use`, відмінний від `access`.
 
 Якщо токен відхилений API Gateway, тіло `401` генерує API Gateway; воно може
 відрізнятися від `{"error":"Unauthorized"}`. Якщо до запиту дійшла Lambda,
@@ -434,7 +489,8 @@ const fetchAllStudents = async (accessToken: string): Promise<Student[]> => {
 
 ### 5.6. `403 Forbidden`
 
-Access token валідний, але не містить точної групи `teachers`.
+Access token валідний, але не містить точної групи `teachers`. Це відповідь
+Lambda teacher guard, а не API Gateway authorizer.
 
 ```json
 {
@@ -460,8 +516,10 @@ Access token валідний, але не містить точної груп�
 }
 ```
 
-Можлива причина — помилка DynamoDB або ініціалізації repository. Деталі не
-розкриваються. Для `GET` запит можна повторити з backoff, якщо це доречно.
+Можлива причина — помилка DynamoDB, ініціалізації repository або
+gateway-generated `500` від Lambda throttling. Деталі не розкриваються. Для
+`GET` запит можна повторити з backoff, якщо це доречно; для `POST /students`
+врахуйте ризик дубліката.
 
 ## 6. Обробка помилок на фронтенді
 
@@ -472,39 +530,141 @@ Access token валідний, але не містить точної груп�
 | `401` | Оновити Cognito-сесію; якщо не вдалося — повторний вхід |
 | `403` | Показати «Доступ заборонено»; перевірити групу `teachers` |
 | `404` | Перевірити шлях; для визначених маршрутів не очікується |
-| `5xx` | Показати загальну помилку; для `GET` можливий backoff |
+| `413` | Тіло завелике; зменшити payload; не повторювати автоматично |
+| `415` | Виправити `Content-Type` на `application/json`; не повторювати автоматично |
+| `429` | Зачекати й повторити з backoff; для `POST /students` врахувати ризик дубліката |
+| `5xx` | Можлива тимчасова помилка, зокрема Lambda throttling; показати загальне повідомлення; для `GET` — backoff |
 | Мережева помилка | Для `GET` можливий retry; для `POST` є ризик дубліката |
 
 Не показуйте користувачу сирі тексти помилок API Gateway або внутрішні деталі.
-Для `POST /students` не робіть автоматичний retry після таймауту без окремого
-рішення щодо ідемпотентності.
+Для `POST /students` не робіть автоматичний retry після таймауту, `429` або
+`500` без окремого рішення щодо ідемпотентності.
 
-## 7. CORS: поточне обмеження
+## 7. CORS
 
-**CORS у backend не налаштований.** У CDK немає CORS-конфігурації для HTTP API і
-немає окремого `OPTIONS`-маршруту.
+CORS налаштований нативно на API Gateway HTTP API. Окремого `OPTIONS`-маршруту
+немає, Lambda не додає CORS-заголовків: preflight обробляє API Gateway до
+виклику інтеграції.
 
-Наслідки для браузера:
+| Параметр | Значення |
+| --- | --- |
+| Дозволені origins | `http://localhost:3000` |
+| Дозволені методи | `GET`, `POST` |
+| Дозволені headers | `content-type`, `authorization` |
+| `AllowCredentials` | `false` |
+| `MaxAge` | `300` секунд |
+| Wildcards | заборонені |
 
-- cross-origin запит із фронтенду на інший домен буде заблокований браузером;
-- `POST /students` із `Content-Type: application/json` потребує preflight;
-- `GET /admin/students` із заголовком `Authorization` також потребує preflight;
-- відповіді не містять `Access-Control-Allow-Origin`;
-- `OPTIONS`-запит не буде оброблений API-контрактом.
+`Authorization: Bearer <accessToken>` передається явно в заголовку. Cross-origin
+cookies не використовуються і не підтримуються, бо `AllowCredentials: false`.
+Origin перевіряється точно: схема, host і port мають збігатися.
 
-До додавання CORS у backend можливі лише варіанти з однаковим origin, наприклад
-через dev-proxy або reverse proxy, який обслуговує і фронтенд, і API. Не
-вимикайте перевірки безпеки браузера як обхідний шлях.
+### 7.1. Локальна розробка Next.js
 
-CORS потрібно додати окремою зміною CDK з конкретним origin фронтенду; у Фазі 3
-це не реалізовано.
+Запускайте Next.js на `http://localhost:3000` (`pnpm dev`). Цей origin уже
+дозволений, тому окремий dev-proxy не потрібен.
 
-## 8. Що фронтенд не повинен робити
+`POST /students` із `Content-Type: application/json` і `GET /admin/students` із
+`Authorization` викликають браузерний preflight. Браузер робить його
+автоматично; не надсилайте `OPTIONS` вручну і не додавайте CORS-заголовки в
+Next.js. Успішний preflight — це 2xx із потрібними `access-control-*`
+заголовками; фактичний статус (зазвичай `204`) фіксуйте під час post-deploy
+перевірки.
+
+Якщо port 3000 зайнятий і Next.js обрав інший port, цей origin не буде
+дозволений. Звільніть port або додайте точний новий origin у
+`DEV_ENVIRONMENT.corsAllowedOrigins` (`lib/environments.ts`) і виконайте
+локальні перевірки та новий деплой. Wildcard використовувати не можна.
+
+### 7.2. Майбутній задеплоєний фронтенд
+
+Коли з'явиться HTTPS-домен фронтенду, додайте його точний origin, наприклад
+`https://struct-lab.example.com`, у `DEV_ENVIRONMENT.corsAllowedOrigins`.
+Валідатор дозволяє HTTPS для будь-якого host, але відхиляє trailing slash, шлях,
+query string, fragment, credentials, дублікати і wildcards. Зміна потребує
+нового синтезу й деплою; до цього вона не діє.
+
+### 7.3. Межі CORS
+
+- CORS — не автентифікація. `GET /admin/students` усе одно вимагає Cognito
+  access token і групу `teachers`.
+- CORS — не rate limiting, не WAF і не захист від спаму. Він лише обмежує
+  браузерні cross-origin запити.
+- CORS виконується браузером. Серверні клієнти та curl його ігнорують.
+- Відповіді `401`, `403`, `429` і gateway-generated `500` від Lambda throttling
+  можуть не містити CORS-заголовків, якщо їх генерує API Gateway, а не
+  інтеграція. Це треба перевірити після деплою; локальні тести та синтез цього
+  не підтверджують.
+
+## 8. Throttling
+
+API Gateway застосовує throttling до існуючого default stage `$default` через
+`DefaultRouteSettings`:
+
+| Параметр | Значення |
+| --- | --- |
+| Rate limit | 10 requests per second |
+| Burst limit | 20 |
+| Stage | `$default` |
+| Перевищення | `429 Too Many Requests` |
+
+Throttling — best-effort обмеження на рівні stage, а не per-IP або per-user
+quota. Усі клієнти поділяють один ліміт; один клієнт може вичерпати burst для
+інших. Це не гарантований hard limit, не WAF і не spending cap. Lambda reserved
+concurrency не налаштований, тому throttling не обмежує кількість одночасних
+Lambda-викликів.
+
+### 8.1. Lambda concurrency
+
+Станом на P4-02.4 dev-акаунт має 10 unreserved concurrent executions, які
+поділяють усі три Lambda-функції. Це account-specific snapshot, а не постійний
+ліміт AWS Free Plan; перед деплоєм квоту треба перевірити знову. Reserved і
+provisioned concurrency не налаштовані.
+
+Сплеск публічних `POST /students` може вичерпати спільний pool, і тоді
+`GET /health` та admin-запити тимчасово не виконуватимуться. API Gateway
+throttling (`10 req/s`, burst `20`) не гарантує concurrency isolation, per-IP
+fairness або hard spending cap. Якщо Lambda throttling спрацьовує, API Gateway
+може повернути gateway-generated `500`, а не `429`; така відповідь може бути без
+CORS-заголовків.
+
+Обробка на фронтенді:
+
+- Покажіть зрозуміле повідомлення про тимчасове перевантаження.
+- Не робіть агресивних автоматичних retry. Якщо retry потрібен, використовуйте
+  exponential backoff з jitter і обмежену кількість спроб.
+- Якщо відповідь містить `Retry-After`, дочекайтеся вказаного часу.
+- Для `POST /students` автоматичний retry після `429`, `500` або таймауту може
+  створити дублікат: idempotency не реалізована. Повторюйте лише після
+  підтвердження користувача.
+- `500` від Lambda throttling трактуйте як тимчасову помилку; для `GET`
+  використовуйте backoff, для `POST /students` не повторюйте автоматично.
+- `GET`-запити зазвичай можна повторити з backoff.
+
+Post-deploy перевірка: під контрольованим навантаженням підтвердити, що
+перевищення API Gateway ліміту дає `429`, а вичерпання Lambda concurrency може
+дати `500`; обидві відповіді мають містити CORS-заголовки для дозволеного
+origin. Локальні тести перевіряють лише синтезовану конфігурацію.
+
+## 9. Що фронтенд не повинен робити
 
 - Не створювати Cognito-акаунти для студентів.
 - Не використовувати ID token для `/admin/students`.
 - Не передавати access token у query string або логах.
-- Не намагатися викликати `/students` з іншого origin до налаштування CORS.
+- Не надсилати JSON із `Content-Type: text/plain`; для `POST /students`
+  обов'язковий `application/json`.
+- Не надсилати тіло більше 4096 decoded bytes і не розраховувати на цей ліміт
+  як на anti-spam або edge-level захист.
+- Не викликати API з origin, відмінного від `http://localhost:3000` (локально)
+  або явно доданого HTTPS-origin (після деплою).
+- Не покладатися на cross-origin cookies; передавайте access token у
+  `Authorization`.
+- Не додавати власні CORS-заголовки або `OPTIONS`-обробник: preflight уже
+  обробляє API Gateway.
+- Не робити агресивних retry після `429` або `500`; для `POST /students` це може
+  створити дублікат.
+- Не вважати throttling per-IP квотою, гарантованим spending cap або
+  concurrency isolation: усі клієнти поділяють спільний Lambda pool.
 - Не розбирати та не модифікувати `nextCursor`.
 - Не покладатися на стабільне сортування студентів.
 - Не вважати, що backend перевіряє особу студента або унікальність запису.
@@ -512,17 +672,23 @@ CORS потрібно додати окремою зміною CDK з конкр
 - Не рендерити `fullName` або `group` як raw HTML; використовуйте безпечний
   текстовий рендеринг та output encoding.
 
-## 9. Чекліст інтеграції
+## 10. Чекліст інтеграції
 
-1. Задеплоїти stack (окрема фаза; у Фазі 3 деплою не було).
+1. Задеплоїти stack (окрема фаза; у P4-01/P4-02 деплою не було).
 2. Взяти `HttpApiUrl`, `UserPoolId` і `UserPoolClientId` зі stack outputs.
 3. Налаштувати Cognito SDK із цими `UserPoolId` та `UserPoolClientId`.
 4. Створити викладача через адміністратора Cognito і додати до групи `teachers`.
 5. Реалізувати SRP-логін і зберігати access token у пам'яті.
 6. Перевірити `GET /health`.
-7. Реалізувати публічну форму з валідацією `fullName` і `group`.
+7. Реалізувати публічну форму з валідацією `fullName` і `group`, заголовком
+   `Content-Type: application/json` і тілом до 4096 байт.
 8. Реалізувати admin-таблицю з пагінацією через `nextCursor`.
-9. Обробити `400`, `401`, `403`, `500` і мережеві помилки.
-10. Додати CORS на backend або same-origin proxy до браузерної інтеграції.
-11. Рендерити `fullName` і `group` лише як текст із output encoding; не
+9. Обробити `400`, `401`, `403`, `413`, `415`, `429`, `500` і мережеві помилки.
+10. Реалізувати backoff для `429`/тимчасових `5xx` і не робити автоматичний
+    retry `POST /students`.
+11. Перевірити, що Next.js працює на `http://localhost:3000` і preflight до
+    `/students` та `/admin/students` проходить (CORS уже налаштований).
+12. Після деплою перевірити `429`, `500` від Lambda throttling і CORS на цих
+    відповідях під контрольованим навантаженням.
+13. Рендерити `fullName` і `group` лише як текст із output encoding; не
     використовувати raw HTML.
