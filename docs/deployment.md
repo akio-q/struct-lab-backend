@@ -2,13 +2,14 @@
 
 **Статус:** P4-01 і P4-02 (P4-02.1–P4-02.4) реалізовано й перевірено локально;
 P4-02.5 security review — PASS. P4-03.1 documentation-only policy для даних,
-retention і recovery та P4-03.2 DynamoDB hardening реалізовано локально;
-інфраструктурні зміни P4-03.3–P4-03.5 ще не реалізовані. У межах цих задач
-жодного AWS API-виклику, `cdk bootstrap`, `cdk diff`, `cdk deploy` або
-`cdk destroy` не виконувалося; AWS-ресурсів ще не створено. Quota snapshot у
-розділі 5 отриманий вручну поза цим workflow. Акаунт залишається на AWS Free
-Plan; реальні грошові витрати не передбачені, платні функції не вмикаються без
-окремого схвалення, але AWS credits можуть витрачатися.
+retention і recovery, P4-03.2 DynamoDB hardening та P4-03.3 Cognito lifecycle
+реалізовано локально; інфраструктурні зміни P4-03.4–P4-03.5 ще не реалізовані.
+У межах цих задач жодного AWS API-виклику, `cdk bootstrap`, `cdk diff`,
+`cdk deploy` або `cdk destroy` не виконувалося; AWS-ресурсів ще не створено і
+реальні Cognito users не створювалися. Quota snapshot у розділі 5 отриманий
+вручну поза цим workflow. Акаунт залишається на AWS Free Plan; реальні грошові
+витрати не передбачені, платні функції не вмикаються без окремого схвалення, але
+AWS credits можуть витрачатися.
 
 Цей документ описує зафіксоване dev-середовище, локальні перевірки та безпечні
 кроки для майбутнього деплою. Він не є дозволом виконувати деплой: кожен
@@ -73,6 +74,11 @@ AWS-крок потребує окремого ручного схвалення
     DynamoDB; некоректний `Content-Type` повертає `415`, перевищення ліміту —
     `413`. Це application-level захист, не edge-level, не WAF і не заміна
     per-IP rate limiting. Деталі — в розділі 2.1.
+12. **Cognito lifecycle.** `TeachersUserPool` явно має
+    `FeaturePlan.ESSENTIALS`, `deletionProtection: true` і
+    `RemovalPolicy.RETAIN`. App Client і група `teachers` зберігають типову
+    поведінку видалення. Stack termination protection навмисно не ввімкнено.
+    Деталі — в розділі 13.6.
 
 ### 2.1. Request hardening для `POST /students`
 
@@ -257,6 +263,12 @@ pnpm synth
   `DeletionProtectionEnabled: true`, `OnDemandThroughput` 25/25,
   `BillingMode: PAY_PER_REQUEST`, незмінними key schema/encryption і
   `DeletionPolicy`/`UpdateReplacePolicy` `Delete`;
+- `AWS::Cognito::UserPool` `TeachersUserPoolA87A0CBA` з
+  `UserPoolTier: ESSENTIALS`, `DeletionProtection: ACTIVE` і
+  `DeletionPolicy`/`UpdateReplacePolicy` `Retain`;
+- `AWS::Cognito::UserPoolClient` `TeachersUserPoolTeachersAppClient7A8BA630` і
+  `AWS::Cognito::UserPoolGroup` `TeachersUserPoolTeachersGroupABBE489E` без
+  явних `DeletionPolicy`/`UpdateReplacePolicy` (типова поведінка — видалення);
 - відсутність `ReservedConcurrentExecutions` у всіх `AWS::Lambda::Function`;
 - відсутність `AWS::Lambda::Version` і `AWS::Lambda::Alias` (provisioned
   concurrency не налаштована);
@@ -394,13 +406,20 @@ pnpm synth
   студентів. Вимкнення захисту та видалення таблиці потребують окремого
   схвалення. Перед видаленням потрібен явний export/backup і перевірка його
   повноти. Детальний runbook — у розділі 13.
-- Cognito User Pool має `RETAIN`; App Client і група `teachers` явного
-  `RETAIN` не мають. Після видалення стека pool може залишитися, а повторний
-  deploy створить нові Cognito-ресурси. Це треба враховувати під час cleanup.
+- Cognito User Pool має `RETAIN` і deletion protection, тому CloudFormation не
+  може видалити pool, доки захист не вимкнено окремо схваленим рішенням.
+  `cdk destroy` або rollback може завершитися помилкою. Вимкнення deletion
+  protection не видаляє pool або users; воно лише дозволяє подальше авторизоване
+  видалення, після якого users не зможуть увійти. App Client і група `teachers`
+  явного `RETAIN` не мають, тому після успішного видалення stack pool може
+  залишитися поза CloudFormation management, а client і група можуть бути
+  видалені. Membership і client configuration не можна вважати збереженими;
+  повторний deploy не перевикористовує retained pool автоматично. Деталі — в
+  розділі 13.6.
 - Не запускайте `cdk destroy` на середовищі, де є дані, без окремого
   runbook і схвалення.
 
-## 9. Межі P4-01, P4-02, P4-03.1 і P4-03.2
+## 9. Межі P4-01, P4-02, P4-03.1, P4-03.2 і P4-03.3
 
 P4-01 не додає throttling, WAF, budgets, alarms, PITR, deletion protection, MFA
 або інші задачі Фази 4. P4-02.1 додає application-level request hardening для
@@ -423,7 +442,14 @@ P4-03.2 змінює лише властивості існуючої `StudentsT
 `maxReadRequestUnits: 25`, `maxWriteRequestUnits: 25`. Application code,
 handlers, repository, Cognito, IAM, API contracts і Lambda environment не
 змінюються. Це локальна зміна; AWS deploy і throughput testing не виконувалися.
-Усі майбутні зміни P4-03.3–P4-03.5 потребують окремого схвалення.
+
+P4-03.3 змінює лише властивості існуючого `TeachersUserPool`:
+`featurePlan: FeaturePlan.ESSENTIALS` і `deletionProtection: true`. Construct
+ID, logical ID, `RETAIN`, App Client і група `teachers`, naming, password
+policy, MFA, auth flows, 30-хвилинний access token, account recovery, JWT
+authorizer і exact `teachers` authorization не змінюються. Це локальна зміна;
+AWS deploy, автентифікація, lifecycle і recovery testing не виконувалися.
+Усі майбутні зміни P4-03.4–P4-03.5 потребують окремого схвалення.
 
 ## 10. Data governance (P4-03.1)
 
@@ -678,10 +704,12 @@ AWS-ресурси, нові IAM-права або S3 bucket не створюю
   **не дає дозволу** на deployment в інший AWS account або на Paid Plan upgrade.
 - External export preserves student records, але не повний AWS environment: він
   не містить Cognito users, app client, групу `teachers`, IAM, API Gateway,
-  Lambda, CloudFormation/CDK state або інші ресурси. Викладачів, клієнт, групу
-  й інфраструктуру треба створювати заново за окремо схваленим runbook.
+  Lambda, CloudFormation/CDK state або інші ресурси. Cognito recovery залежить
+  від retained User Pool: users можуть зберегтися, але client, група й membership
+  можуть потребувати повторного створення та перевірки. Це потребує окремо
+  схваленої процедури; автоматичних recovery scripts немає.
 
-## 13. DynamoDB hardening, deletion protection і rollback
+## 13. DynamoDB і Cognito lifecycle protection, deletion protection і rollback
 
 ### 13.1. Поточний стан
 
@@ -747,6 +775,45 @@ AWS-ресурси, нові IAM-права або S3 bucket не створюю
 - Локальний synth підтверджує конфігурацію, але не фактичну поведінку під
   навантаженням; throughput і throttling у AWS не тестувалися.
 
+### 13.6. Cognito User Pool lifecycle
+
+Локально синтезована конфігурація P4-03.3 (AWS deploy не виконувався):
+
+| Ресурс | Logical ID | Deletion protection | DeletionPolicy | UpdateReplacePolicy |
+| --- | --- | --- | --- | --- |
+| User Pool | `TeachersUserPoolA87A0CBA` | `ACTIVE` | `Retain` | `Retain` |
+| App Client | `TeachersUserPoolTeachersAppClient7A8BA630` | не застосовується | не задано (типова — `Delete`) | не задано (типова — `Delete`) |
+| Група `teachers` | `TeachersUserPoolTeachersGroupABBE489E` | не застосовується | не задано (типова — `Delete`) | не задано (типова — `Delete`) |
+
+- `RemovalPolicy.RETAIN` зберігає User Pool, коли CloudFormation прибирає його з
+  management під час видалення stack. Це не блокує явний `DeleteUserPool`.
+- Cognito deletion protection блокує видалення User Pool, доки захист
+  увімкнений. Вимкнення захисту саме по собі не видаляє pool або users; воно
+  лише дозволяє подальше авторизоване видалення. Після успішного видалення pool
+  зникає, а його users не можуть увійти.
+- CloudFormation stack termination protection — окремий stack-level контроль.
+  Він **не ввімкнений** і не замінює `RETAIN` або Cognito deletion protection.
+- Вимкнення deletion protection, deactivation користувачів і видалення User Pool
+  потребують окремого схвалення.
+- Deletion protection не захищає окремих users від видалення або зміни, не є
+  backup і не захищає від втрати доступу до AWS-акаунта.
+
+Після успішного видалення stack retained User Pool може залишитися поза
+CloudFormation management, а users — у ньому. App Client і група `teachers`
+явного `RETAIN` не мають, тому можуть бути видалені; membership і client
+configuration не можна вважати збереженими. Новий deployment не перевикористовує
+retained pool автоматично і створює нові Cognito-ресурси; новий client може
+вимагати повторної автентифікації.
+
+Recovery потребує окремо схваленої процедури: імпорт або явне посилання на
+retained pool, повторне створення client і групи, відновлення складу `teachers`,
+оновлення frontend (`UserPoolId`, `UserPoolClientId`) і перевірка authorization.
+Автоматичних import/migration/account recreation/recovery scripts немає.
+
+Retained resources можуть залишитися й після failed deployment або rollback.
+Звичайне успішне видалення stack не гарантоване, доки DynamoDB deletion
+protection залишається увімкненим (розділ 13.3).
+
 ## 14. AWS Free Plan і cost constraints
 
 - Dev-середовище тимчасове й призначене лише для розробки.
@@ -762,7 +829,16 @@ AWS-ресурси, нові IAM-права або S3 bucket не створюю
   витрачати AWS credits.
 - On-demand limits 25 RRU/s і 25 WRU/s не є hard spending caps і не гарантують
   нульового споживання credits; вони обмежують request units best-effort.
-- P4-03.1 і P4-03.2 не додають PITR, AWS Backup, customer-managed KMS keys, WAF,
+- Cognito Essentials — затверджений tier. AWS публікує free allowance
+  **10 000 MAU** для eligible direct authentication; eligibility і фактичний
+  billing конкретного акаунта треба перевірити до deployment. Retained User Pool
+  і users залишаються subject to AWS account lifecycle і applicable pricing;
+  credits і free allowances не є необмеженими.
+- P4-03.3 не вмикає Cognito Plus, advanced security/threat protection, SMS або
+  email MFA, managed login/Hosted UI, OAuth flows, Cognito domains, зовнішні
+  identity providers, Lambda triggers, custom messaging, customer-managed KMS
+  keys або SNS/SES infrastructure.
+- P4-03.1–P4-03.3 не додають PITR, AWS Backup, customer-managed KMS keys, WAF,
   budgets або іншу платну інфраструктуру.
 - Paid Plan upgrade не передбачений.
 - AWS credits не є необмеженим безкоштовним використанням. Водночас документ не
@@ -773,7 +849,7 @@ AWS-ресурси, нові IAM-права або S3 bucket не створюю
 
 ## 15. Future production requirements (out of scope)
 
-Наступні теми не входять у P4-03.1 і P4-03.2 і потребують окремого
+Наступні теми не входять у P4-03.1–P4-03.3 і потребують окремого
 проєктування, privacy/security review і схвалення:
 
 - обробка реальних персональних даних студентів;

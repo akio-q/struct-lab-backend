@@ -17,7 +17,7 @@ import {
 } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpUserPoolAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
-import { UserPool } from 'aws-cdk-lib/aws-cognito';
+import { FeaturePlan, UserPool } from 'aws-cdk-lib/aws-cognito';
 import {
   AttributeType,
   BillingMode,
@@ -159,6 +159,11 @@ export class StructLabStack extends Stack {
       // not explicitly retained, so removing the stack deletes them. A later
       // deploy creates new Cognito resources and does not automatically reuse
       // this pool.
+      // Essentials is the approved tier and supports the planned
+      // password-history control. The pool is retained and protected while it
+      // remains under stack management; deletion requires separate approval.
+      featurePlan: FeaturePlan.ESSENTIALS,
+      deletionProtection: true,
       removalPolicy: RemovalPolicy.RETAIN,
     });
 

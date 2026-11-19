@@ -48,9 +48,13 @@ interface UserPoolResource {
   DeletionPolicy?: string;
   UpdateReplacePolicy?: string;
   Properties?: {
+    UserPoolTier?: string;
+    DeletionProtection?: string;
     AdminCreateUserConfig?: {
       AllowAdminCreateUserOnly?: boolean;
     };
+    MfaConfiguration?: string;
+    LambdaConfig?: unknown;
     Policies?: {
       PasswordPolicy?: {
         MinimumLength?: number;
@@ -64,6 +68,8 @@ interface UserPoolResource {
 }
 
 interface UserPoolClientResource {
+  DeletionPolicy?: string;
+  UpdateReplacePolicy?: string;
   Properties?: {
     GenerateSecret?: boolean;
     UserPoolId?: unknown;
@@ -84,6 +90,8 @@ interface UserPoolClientResource {
 }
 
 interface UserPoolGroupResource {
+  DeletionPolicy?: string;
+  UpdateReplacePolicy?: string;
   Properties?: {
     GroupName?: string;
     UserPoolId?: unknown;
@@ -437,12 +445,15 @@ describe('StructLabStack', () => {
   it('creates exactly one locked-down Cognito user pool', () => {
     template.resourceCountIs('AWS::Cognito::UserPool', 1);
 
-    const [, userPool] = getSingleResource<UserPoolResource>(
+    const [poolLogicalId, userPool] = getSingleResource<UserPoolResource>(
       'AWS::Cognito::UserPool',
     );
 
+    expect(poolLogicalId).toBe('TeachersUserPoolA87A0CBA');
     expect(userPool.DeletionPolicy).toBe('Retain');
     expect(userPool.UpdateReplacePolicy).toBe('Retain');
+    expect(userPool.Properties?.UserPoolTier).toBe('ESSENTIALS');
+    expect(userPool.Properties?.DeletionProtection).toBe('ACTIVE');
     expect(
       userPool.Properties?.AdminCreateUserConfig?.AllowAdminCreateUserOnly,
     ).toBe(true);
@@ -453,6 +464,8 @@ describe('StructLabStack', () => {
       RequireNumbers: true,
       RequireSymbols: true,
     });
+    expect(userPool.Properties?.MfaConfiguration).toBeUndefined();
+    expect(userPool.Properties?.LambdaConfig).toBeUndefined();
   });
 
   it('creates exactly one public app client with minimal auth flows', () => {
@@ -462,10 +475,13 @@ describe('StructLabStack', () => {
     const [poolLogicalId] = getSingleResource<UserPoolResource>(
       'AWS::Cognito::UserPool',
     );
-    const [, client] = getSingleResource<UserPoolClientResource>(
+    const [clientLogicalId, client] = getSingleResource<UserPoolClientResource>(
       'AWS::Cognito::UserPoolClient',
     );
 
+    expect(clientLogicalId).toBe('TeachersUserPoolTeachersAppClient7A8BA630');
+    expect(client.DeletionPolicy).toBeUndefined();
+    expect(client.UpdateReplacePolicy).toBeUndefined();
     expect(client.Properties?.GenerateSecret).toBe(false);
     expect(client.Properties?.UserPoolId).toEqual({ Ref: poolLogicalId });
     expect(client.Properties?.ExplicitAuthFlows).toEqual([
@@ -492,12 +508,35 @@ describe('StructLabStack', () => {
     const [poolLogicalId] = getSingleResource<UserPoolResource>(
       'AWS::Cognito::UserPool',
     );
-    const [, group] = getSingleResource<UserPoolGroupResource>(
+    const [groupLogicalId, group] = getSingleResource<UserPoolGroupResource>(
       'AWS::Cognito::UserPoolGroup',
     );
 
+    expect(groupLogicalId).toBe('TeachersUserPoolTeachersGroupABBE489E');
+    expect(group.DeletionPolicy).toBeUndefined();
+    expect(group.UpdateReplacePolicy).toBeUndefined();
     expect(group.Properties?.GroupName).toBe('teachers');
     expect(group.Properties?.UserPoolId).toEqual({ Ref: poolLogicalId });
+  });
+
+  it('does not add deferred Cognito resources or integrations', () => {
+    const [, userPool] = getSingleResource<UserPoolResource>(
+      'AWS::Cognito::UserPool',
+    );
+
+    expect(userPool.Properties?.LambdaConfig).toBeUndefined();
+
+    for (const type of [
+      'AWS::Cognito::UserPoolDomain',
+      'AWS::Cognito::UserPoolIdentityProvider',
+      'AWS::Cognito::IdentityPool',
+      'AWS::SNS::Topic',
+      'AWS::SNS::Subscription',
+      'AWS::SES::ConfigurationSet',
+      'AWS::SES::EmailIdentity',
+    ]) {
+      template.resourceCountIs(type, 0);
+    }
   });
 
   it('creates one JWT authorizer for the app client and user pool', () => {
