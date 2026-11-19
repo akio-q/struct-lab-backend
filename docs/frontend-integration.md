@@ -2,10 +2,11 @@
 
 **Статус:** P4-01 і P4-02 (P4-02.1 request hardening, P4-02.2 CORS, P4-02.3
 throttling і P4-02.4 concurrency awareness) реалізовано й перевірено локально;
-P4-02.5 security review — PASS. P4-03.4 Cognito Token Security реалізовано
-локально, але AWS-деплой ще не виконувався, тому реальної базової URL-адреси
-поки немає. Після деплою її треба взяти зі stack output `HttpApiUrl`. Поведінка
-frontend authentication і token-refresh окремо не перевірялася.
+P4-02.5 security review — PASS. P4-03.4 Cognito Token Security і P4-03.5
+Cognito Account Security реалізовано локально, але AWS-деплой ще не виконувався,
+тому реальної базової URL-адреси поки немає. Після деплою її треба взяти зі
+stack output `HttpApiUrl`. Поведінка frontend authentication, token-refresh,
+password history і account recovery окремо не перевірялася.
 
 Цей документ описує лише те, що реально реалізовано в коді. Він не додає
 endpoint-ів, полів або поведінки, яких немає в backend.
@@ -58,6 +59,11 @@ endpoint-ів, полів або поведінки, яких немає в back
 | App Client secret | відсутній (публічний клієнт) |
 | Self-sign-up | вимкнено |
 | Створення акаунтів | лише адміністратором User Pool |
+| Password policy | мінімум 12 символів; lowercase, uppercase, digits, symbols |
+| Password history | 5 |
+| Temporary password validity | 3 дні |
+| Account recovery | лише адміністратор (`AccountRecovery.NONE`) |
+| User-existence errors | приховані (`PreventUserExistenceErrors: ENABLED`) |
 | Auth flow | SRP (`ALLOW_USER_SRP_AUTH`) + refresh token (`ALLOW_REFRESH_TOKEN_AUTH`) |
 | OAuth / Hosted UI | вимкнено |
 | Access token | 15 хвилин |
@@ -168,6 +174,29 @@ Authorization: Bearer <accessToken>
 - Передається саме access token.
 - Cookie-авторизація не використовується.
 - Токен має бути виданий для налаштованого User Pool і App Client.
+
+### 2.6. Паролі, recovery та user enumeration (P4-03.5)
+
+- Password history — **5**. Коли Cognito застосовує policy, останні п'ять
+  паролів не можна повторно використати. Наявні паролі не скидаються
+  автоматично.
+- Temporary password validity — **3 дні**. Якщо тимчасовий пароль прострочений,
+  потрібне втручання адміністратора.
+- Account recovery — **лише адміністратор** (`AccountRecovery.NONE`).
+  Self-service «Forgot password» у Cognito вимкнений. Не пропонуйте
+  self-service recovery у фронтенді; скеровуйте викладача до авторизованого
+  адміністратора.
+- `PreventUserExistenceErrors: ENABLED` означає, що помилки входу мають
+  оброблятися узагальнено. Не показуйте різні повідомлення залежно від того, чи
+  існує акаунт, і не робіть висновків про наявність користувача з тексту помилки.
+  Це зменшує information disclosure, але не є гарантією проти всіх методів
+  enumeration.
+- Існуюча frontend-обробка помилок може потребувати перевірки. Реальні Cognito
+  login, password change, password reset, temporary-password expiry і recovery
+  flow не тестувалися.
+- Ці налаштування реалізовані локально, але не задеплоєні в AWS. Адміністратор
+  потребує відповідних permissions і окремо затвердженої процедури recovery;
+  administrative recovery API або frontend recovery UI не реалізовані.
 
 ## 3. `GET /health`
 
@@ -548,6 +577,12 @@ gateway-generated `500` від Lambda throttling. Деталі не розкри
 Не показуйте користувачу сирі тексти помилок API Gateway або внутрішні деталі.
 Для `POST /students` не робіть автоматичний retry після таймауту, `429` або
 `500` без окремого рішення щодо ідемпотентності.
+
+Cognito authentication errors (sign-in, password change, password history,
+recovery) обробляйте узагальнено: не розкривайте, чи існує акаунт, і не
+пропонуйте self-service password recovery, оскільки `AccountRecovery.NONE`
+вимикає його. Для відновлення доступу скеровуйте викладача до авторизованого
+адміністратора.
 
 ## 7. CORS
 

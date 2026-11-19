@@ -53,6 +53,12 @@ interface UserPoolResource {
     AdminCreateUserConfig?: {
       AllowAdminCreateUserOnly?: boolean;
     };
+    AccountRecoverySetting?: {
+      RecoveryMechanisms?: Array<{
+        Name?: string;
+        Priority?: number;
+      }>;
+    };
     MfaConfiguration?: string;
     LambdaConfig?: unknown;
     Policies?: {
@@ -62,6 +68,8 @@ interface UserPoolResource {
         RequireUppercase?: boolean;
         RequireNumbers?: boolean;
         RequireSymbols?: boolean;
+        PasswordHistorySize?: number;
+        TemporaryPasswordValidityDays?: number;
       };
     };
   };
@@ -74,6 +82,7 @@ interface UserPoolClientResource {
     GenerateSecret?: boolean;
     UserPoolId?: unknown;
     ExplicitAuthFlows?: string[];
+    PreventUserExistenceErrors?: string;
     AccessTokenValidity?: number;
     IdTokenValidity?: number;
     RefreshTokenValidity?: number;
@@ -497,12 +506,17 @@ describe('StructLabStack', () => {
     expect(
       userPool.Properties?.AdminCreateUserConfig?.AllowAdminCreateUserOnly,
     ).toBe(true);
+    expect(userPool.Properties?.AccountRecoverySetting).toEqual({
+      RecoveryMechanisms: [{ Name: 'admin_only', Priority: 1 }],
+    });
     expect(userPool.Properties?.Policies?.PasswordPolicy).toEqual({
       MinimumLength: 12,
       RequireLowercase: true,
       RequireUppercase: true,
       RequireNumbers: true,
       RequireSymbols: true,
+      PasswordHistorySize: 5,
+      TemporaryPasswordValidityDays: 3,
     });
     expect(userPool.Properties?.MfaConfiguration).toBeUndefined();
     expect(userPool.Properties?.LambdaConfig).toBeUndefined();
@@ -528,6 +542,7 @@ describe('StructLabStack', () => {
       'ALLOW_USER_SRP_AUTH',
       'ALLOW_REFRESH_TOKEN_AUTH',
     ]);
+    expect(client.Properties?.PreventUserExistenceErrors).toBe('ENABLED');
     expect(client.Properties?.AccessTokenValidity).toBe(15);
     // CDK L2 normalizes refresh-token validity to minutes, so seven days is
     // synthesized as 10080 minutes rather than `7` with a `days` unit.

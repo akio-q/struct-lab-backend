@@ -17,7 +17,7 @@ import {
 } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpUserPoolAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
-import { FeaturePlan, UserPool } from 'aws-cdk-lib/aws-cognito';
+import { AccountRecovery, FeaturePlan, UserPool } from 'aws-cdk-lib/aws-cognito';
 import {
   AttributeType,
   BillingMode,
@@ -154,7 +154,15 @@ export class StructLabStack extends Stack {
         requireUppercase: true,
         requireDigits: true,
         requireSymbols: true,
+        // Reuse of the last five passwords is blocked when Cognito enforces
+        // this policy. This does not reset existing passwords.
+        passwordHistorySize: 5,
+        // Temporary administrator-issued passwords expire after three days.
+        tempPasswordValidity: Duration.days(3),
       },
+      // No self-service recovery. Teachers must contact an authorized
+      // administrator, and Cognito synthesizes the admin_only mechanism.
+      accountRecovery: AccountRecovery.NONE,
       // Only the user pool is retained. The app client and teachers group are
       // not explicitly retained, so removing the stack deletes them. A later
       // deploy creates new Cognito resources and does not automatically reuse
@@ -171,7 +179,8 @@ export class StructLabStack extends Stack {
     // because this phase defines no callback URLs or domain. Access tokens are
     // short-lived, refresh tokens last one week, and refresh-token rotation is
     // intentionally left disabled. The ID token validity is not set here, so
-    // the Cognito default (60 minutes) remains unchanged.
+    // the Cognito default (60 minutes) remains unchanged. User-existence errors
+    // are generalized to reduce account-enumeration disclosure.
     const teachersAppClient = teachersUserPool.addClient('TeachersAppClient', {
       generateSecret: false,
       disableOAuth: true,
@@ -181,6 +190,7 @@ export class StructLabStack extends Stack {
       accessTokenValidity: Duration.minutes(15),
       refreshTokenValidity: Duration.days(7),
       enableTokenRevocation: true,
+      preventUserExistenceErrors: true,
     });
 
     teachersUserPool.addGroup('TeachersGroup', {
