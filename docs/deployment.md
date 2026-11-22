@@ -1,12 +1,16 @@
 # Dev deployment: environment pinning and safeguards
 
 **Статус:** P4-01 і P4-02 (P4-02.1–P4-02.4) реалізовано й перевірено локально;
-P4-02.5 security review — PASS. P4-03.1 documentation-only policy для даних,
-retention і recovery, P4-03.2 DynamoDB hardening та P4-03.3 Cognito lifecycle
-реалізовано локально; інфраструктурні зміни P4-03.4–P4-03.5 ще не реалізовані.
+P4-02.5 security review — PASS. P4-03.1–P4-03.3 змерджено в main. P4-03.4
+Cognito Token Security і P4-03.5 Cognito Account Security реалізовано,
+перевірено й запушено в `origin/feat/cognito-account-security`; у main ще не
+змерджено. P4-03.6 Final Review — фінальний security audit PASS; коригувальні
+зміни очікують фінального прийняття. Наступна запланована задача після
+прийняття й мерджу P4-03 — P4-04 Observability & Cost Control.
 У межах цих задач жодного AWS API-виклику, `cdk bootstrap`, `cdk diff`,
 `cdk deploy` або `cdk destroy` не виконувалося; AWS-ресурсів ще не створено і
-реальні Cognito users не створювалися. Quota snapshot у розділі 5 отриманий
+реальні Cognito users не створювалися, password history і account recovery не
+перевірялися. Quota snapshot у розділі 5 отриманий
 вручну поза цим workflow. Акаунт залишається на AWS Free Plan; реальні грошові
 витрати не передбачені, платні функції не вмикаються без окремого схвалення, але
 AWS credits можуть витрачатися.
@@ -79,6 +83,14 @@ AWS-крок потребує окремого ручного схвалення
     `RemovalPolicy.RETAIN`. App Client і група `teachers` зберігають типову
     поведінку видалення. Stack termination protection навмисно не ввімкнено.
     Деталі — в розділі 13.6.
+13. **Cognito token security.** Існуючий App Client має 15-хвилинний access
+    token, 7-денний refresh token і явно увімкнений token revocation.
+    Refresh-token rotation вимкнено, ID token validity не змінювалася.
+    Деталі та обмеження — в розділі 13.7.
+14. **Cognito account security.** User Pool має password history 5,
+    temporary password validity 3 дні і admin-only account recovery. App Client
+    приховує user-existence errors. Наявні паролі не скидаються, self-service
+    recovery вимкнений. Деталі та обмеження — в розділі 13.8.
 
 ### 2.1. Request hardening для `POST /students`
 
@@ -266,9 +278,19 @@ pnpm synth
 - `AWS::Cognito::UserPool` `TeachersUserPoolA87A0CBA` з
   `UserPoolTier: ESSENTIALS`, `DeletionProtection: ACTIVE` і
   `DeletionPolicy`/`UpdateReplacePolicy` `Retain`;
+- User Pool account security: `PasswordHistorySize: 5`,
+  `TemporaryPasswordValidityDays: 3`, а `AccountRecoverySetting` містить лише
+  `admin_only`; existing password complexity не змінюється;
 - `AWS::Cognito::UserPoolClient` `TeachersUserPoolTeachersAppClient7A8BA630` і
   `AWS::Cognito::UserPoolGroup` `TeachersUserPoolTeachersGroupABBE489E` без
   явних `DeletionPolicy`/`UpdateReplacePolicy` (типова поведінка — видалення);
+- App Client token settings: `AccessTokenValidity: 15`,
+  `RefreshTokenValidity: 10080` (7 днів у хвилинах, оскільки CDK L2 нормалізує
+  refresh validity до хвилин), `EnableTokenRevocation: true`,
+  `TokenValidityUnits: { AccessToken: minutes, RefreshToken: minutes }`;
+  `IdTokenValidity` і `RefreshTokenRotation` відсутні, `ExplicitAuthFlows`
+  зберігає `ALLOW_USER_SRP_AUTH` і `ALLOW_REFRESH_TOKEN_AUTH`,
+  `GenerateSecret: false`, `PreventUserExistenceErrors: ENABLED`;
 - відсутність `ReservedConcurrentExecutions` у всіх `AWS::Lambda::Function`;
 - відсутність `AWS::Lambda::Version` і `AWS::Lambda::Alias` (provisioned
   concurrency не налаштована);
@@ -301,11 +323,12 @@ pnpm synth
 
 Не вимикайте перевірку в коді, щоб обійти це обмеження.
 
-## 7. Майбутні кроки деплою (не виконано в P4-01 і P4-02)
+## 7. Майбутні кроки деплою (не виконано в P4-01–P4-03.6)
 
 Наведені команди призначені для наступних задач Фази 4 після окремого
-схвалення. P4-01 і P4-02 їх **не виконували**; P4-03 — наступна запланована
-задача.
+схвалення. P4-01, P4-02 і P4-03 їх **не виконували**. P4-03.6 Final Review
+завершив security audit; P4-04 Observability & Cost Control — наступна
+запланована задача після прийняття й мерджу P4-03.
 
 1. Встановити/налаштувати AWS CLI v2 і profile `structlab-dev` з регіоном
    `eu-north-1`.
@@ -419,7 +442,7 @@ pnpm synth
 - Не запускайте `cdk destroy` на середовищі, де є дані, без окремого
   runbook і схвалення.
 
-## 9. Межі P4-01, P4-02, P4-03.1, P4-03.2 і P4-03.3
+## 9. Межі P4-01, P4-02 і P4-03.1–P4-03.6
 
 P4-01 не додає throttling, WAF, budgets, alarms, PITR, deletion protection, MFA
 або інші задачі Фази 4. P4-02.1 додає application-level request hardening для
@@ -446,10 +469,37 @@ handlers, repository, Cognito, IAM, API contracts і Lambda environment не
 P4-03.3 змінює лише властивості існуючого `TeachersUserPool`:
 `featurePlan: FeaturePlan.ESSENTIALS` і `deletionProtection: true`. Construct
 ID, logical ID, `RETAIN`, App Client і група `teachers`, naming, password
-policy, MFA, auth flows, 30-хвилинний access token, account recovery, JWT
-authorizer і exact `teachers` authorization не змінюються. Це локальна зміна;
-AWS deploy, автентифікація, lifecycle і recovery testing не виконувалися.
-Усі майбутні зміни P4-03.4–P4-03.5 потребують окремого схвалення.
+policy, MFA, auth flows, access token TTL, account recovery, JWT authorizer і
+exact `teachers` authorization не змінюються. Це локальна зміна; AWS deploy,
+автентифікація, lifecycle і recovery testing не виконувалися.
+
+P4-03.4 змінює лише token-властивості існуючого App Client:
+`accessTokenValidity: Duration.minutes(15)`,
+`refreshTokenValidity: Duration.days(7)` і `enableTokenRevocation: true`.
+Construct ID, logical ID, User Pool, група `teachers`, auth flows, password
+policy, MFA, account recovery, JWT authorizer і API contracts не змінюються.
+Refresh-token rotation, OAuth/Hosted UI, Cognito domain, identity providers,
+Lambda triggers і advanced security не вмикаються. ID token validity явно не
+задається, тому Cognito default (60 хвилин) зберігається. Це локальна зміна;
+AWS deploy і перевірка реальної token/revocation поведінки не виконувалися.
+
+P4-03.5 змінює лише account-security властивості існуючих Cognito ресурсів:
+`passwordHistorySize: 5`, `tempPasswordValidity: Duration.days(3)`,
+`accountRecovery: AccountRecovery.NONE` і `preventUserExistenceErrors: true`.
+Existing password complexity, construct IDs, logical IDs, User Pool tier,
+deletion protection, `RETAIN`, App Client token settings, auth flows, група
+`teachers`, JWT authorizer, API contracts, DynamoDB та IAM не змінюються.
+Self-service recovery вимикається; administrative recovery API, frontend
+recovery UI, messaging infrastructure і automated account-management scripts
+не додаються. Це локальна зміна; AWS deploy, реальний login, password reset,
+temporary-password expiry і recovery testing не виконувалися.
+
+P4-03.5 завершує інфраструктурні зміни P4-03. P4-03.6 Final Review — фінальний
+security audit PASS. Коригувальні зміни LOW-01–LOW-04 та INFO-03 не додають
+AWS-ресурсів, не змінюють logical IDs і не послаблюють deployment restrictions.
+LOW-04 додає `cache-control: no-store` до Lambda JSON responses, тому Lambda
+asset hash може змінитися; це не інфраструктурна зміна. P4-04 Observability &
+Cost Control — наступна запланована задача після прийняття й мерджу P4-03.
 
 ## 10. Data governance (P4-03.1)
 
@@ -814,6 +864,83 @@ Retained resources можуть залишитися й після failed deploy
 Звичайне успішне видалення stack не гарантоване, доки DynamoDB deletion
 protection залишається увімкненим (розділ 13.3).
 
+### 13.7. Cognito token security
+
+Локально синтезована конфігурація P4-03.4 (AWS deploy не виконувався):
+
+| Параметр CloudFormation | Значення | Примітка |
+| --- | --- | --- |
+| `AccessTokenValidity` | `15` | `TokenValidityUnits.AccessToken: minutes` |
+| `RefreshTokenValidity` | `10080` | 7 днів; `TokenValidityUnits.RefreshToken: minutes` |
+| `IdTokenValidity` | відсутній | Cognito default — 60 хвилин, не змінювався |
+| `EnableTokenRevocation` | `true` | явно увімкнено |
+| `RefreshTokenRotation` | відсутній | rotation вимкнено |
+| `ExplicitAuthFlows` | `ALLOW_USER_SRP_AUTH`, `ALLOW_REFRESH_TOKEN_AUTH` | без змін |
+| `GenerateSecret` | `false` | публічний client без secret |
+| `AllowedOAuthFlowsUserPoolClient` | `false` | OAuth/Hosted UI вимкнено |
+
+`refreshTokenValidity: Duration.days(7)` у CDK L2 синтезується як 10080 хвилин,
+а не як `7` з одиницею `days`. Це та сама 7-денна тривалість. CloudFormation
+overrides не використовувалися.
+
+Обмеження та поведінка:
+
+- Token revocation має бути увімкнений для App Client; у цій конфігурації він
+  увімкнений явно.
+- Відкликання refresh token може унеможливити його подальше використання.
+  Конкретна поведінка залежить від Cognito і клієнтського flow.
+- Revocation **не гарантує** негайного відхилення вже виданого й не простроченого
+  JWT на рівні API Gateway JWT authorizer. Authorizer перевіряє підпис, issuer,
+  audience і строк дії, але не звертається до revocation list.
+- Коротший 15-хвилинний access token зменшує максимальне вікно, протягом якого
+  такий token може залишатися дійсним.
+- Frontend authentication і token-refresh logic у P4-03.4 не змінювалися.
+  Існуючу frontend-інтеграцію треба перевірити окремо до deployment.
+- Після завершення refresh token користувачу може знадобитися повторний sign-in.
+- Зменшення refresh token validity до 7 днів не скорочує заднім числом уже видані
+  refresh tokens; нова тривалість застосовується до токенів, виданих після
+  deployment нової конфігурації.
+- Локальний synth підтверджує лише конфігурацію, а не фактичну Cognito
+  authentication, expiration або revocation поведінку.
+- Ресурсний склад стека не змінився: 25 ресурсів, як і до P4-03.4.
+
+### 13.8. Cognito account security
+
+Локально синтезована конфігурація P4-03.5 (AWS deploy не виконувався):
+
+| Параметр CloudFormation | Значення | Примітка |
+| --- | --- | --- |
+| `Policies.PasswordPolicy.MinimumLength` | `12` | без змін |
+| `Policies.PasswordPolicy.RequireLowercase` | `true` | без змін |
+| `Policies.PasswordPolicy.RequireUppercase` | `true` | без змін |
+| `Policies.PasswordPolicy.RequireNumbers` | `true` | без змін |
+| `Policies.PasswordPolicy.RequireSymbols` | `true` | без змін |
+| `Policies.PasswordPolicy.PasswordHistorySize` | `5` | нове |
+| `Policies.PasswordPolicy.TemporaryPasswordValidityDays` | `3` | нове |
+| `AccountRecoverySetting.RecoveryMechanisms` | `[{ Name: admin_only, Priority: 1 }]` | self-service recovery вимкнений |
+| `UserPoolClient.PreventUserExistenceErrors` | `ENABLED` | нове |
+
+Обмеження та поведінка:
+
+- Останні п'ять паролів не можна повторно використати, коли Cognito застосовує
+  налаштовану history policy.
+- Зміна не скидає наявні паролі автоматично і не переписує password history
+  заднім числом.
+- Temporary password validity — 3 дні. Прострочені temporary credentials
+  потребують втручання адміністратора.
+- `AccountRecovery.NONE` вимикає Cognito self-service password recovery.
+  Викладачі мають звертатися до авторизованого адміністратора.
+- Адміністратор потребує відповідних permissions і окремо затвердженої
+  процедури recovery. Administrative recovery API, frontend recovery UI і
+  автоматичні account-management scripts не реалізовані.
+- `PreventUserExistenceErrors: ENABLED` зменшує розкриття інформації про
+  наявність акаунта, але не гарантує захист від усіх методів enumeration.
+- Існуюча frontend-обробка помилок може потребувати перевірки.
+- Реальні Cognito login, password reset, temporary-password expiry і frontend
+  recovery flow не тестувалися.
+- Локальний synth підтверджує лише конфігурацію, а не фактичну поведінку AWS.
+- Ресурсний склад стека не змінився: 25 ресурсів, як і до P4-03.5.
+
 ## 14. AWS Free Plan і cost constraints
 
 - Dev-середовище тимчасове й призначене лише для розробки.
@@ -834,11 +961,11 @@ protection залишається увімкненим (розділ 13.3).
   billing конкретного акаунта треба перевірити до deployment. Retained User Pool
   і users залишаються subject to AWS account lifecycle і applicable pricing;
   credits і free allowances не є необмеженими.
-- P4-03.3 не вмикає Cognito Plus, advanced security/threat protection, SMS або
-  email MFA, managed login/Hosted UI, OAuth flows, Cognito domains, зовнішні
-  identity providers, Lambda triggers, custom messaging, customer-managed KMS
-  keys або SNS/SES infrastructure.
-- P4-03.1–P4-03.3 не додають PITR, AWS Backup, customer-managed KMS keys, WAF,
+- P4-03.3, P4-03.4 і P4-03.5 не вмикають Cognito Plus, advanced security/threat
+  protection, SMS або email MFA, managed login/Hosted UI, OAuth flows, Cognito
+  domains, зовнішні identity providers, Lambda triggers, custom messaging,
+  customer-managed KMS keys або SNS/SES infrastructure.
+- P4-03.1–P4-03.5 не додають PITR, AWS Backup, customer-managed KMS keys, WAF,
   budgets або іншу платну інфраструктуру.
 - Paid Plan upgrade не передбачений.
 - AWS credits не є необмеженим безкоштовним використанням. Водночас документ не
@@ -849,7 +976,7 @@ protection залишається увімкненим (розділ 13.3).
 
 ## 15. Future production requirements (out of scope)
 
-Наступні теми не входять у P4-03.1–P4-03.3 і потребують окремого
+Наступні теми не входять у P4-03.1–P4-03.5 і потребують окремого
 проєктування, privacy/security review і схвалення:
 
 - обробка реальних персональних даних студентів;

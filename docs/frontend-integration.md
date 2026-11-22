@@ -2,16 +2,21 @@
 
 **Статус:** P4-01 і P4-02 (P4-02.1 request hardening, P4-02.2 CORS, P4-02.3
 throttling і P4-02.4 concurrency awareness) реалізовано й перевірено локально;
-P4-02.5 security review — PASS. Наступна запланована задача — P4-03. AWS-деплой
+P4-02.5 security review — PASS. P4-03.4 Cognito Token Security і P4-03.5
+Cognito Account Security реалізовано, перевірено й запушено в
+`origin/feat/cognito-account-security`; P4-03.6 security audit — PASS. AWS-деплой
 ще не виконувався, тому реальної базової URL-адреси поки немає. Після деплою її
-треба взяти зі stack output `HttpApiUrl`.
+треба взяти зі stack output `HttpApiUrl`. Поведінка frontend authentication,
+token-refresh, password history і account recovery окремо не перевірялася.
 
 Цей документ описує лише те, що реально реалізовано в коді. Він не додає
 endpoint-ів, полів або поведінки, яких немає в backend.
 
 ## 1. Загальні правила
 
-- Усі відповіді API мають `content-type: application/json`.
+- JSON-відповіді, сформовані Lambda через спільний `jsonResponse`, мають
+  `content-type: application/json` і `cache-control: no-store`. Це не
+  поширюється на помилки, які генерує API Gateway без участі Lambda.
 - Базовий URL: значення output `HttpApiUrl`, наприклад
   `https://<api-id>.execute-api.<region>.amazonaws.com`.
 - Шляхи вказуються без завершального слеша: `/students`, `/admin/students`.
@@ -57,9 +62,17 @@ endpoint-ів, полів або поведінки, яких немає в back
 | App Client secret | відсутній (публічний клієнт) |
 | Self-sign-up | вимкнено |
 | Створення акаунтів | лише адміністратором User Pool |
-| Auth flow | SRP |
+| Password policy | мінімум 12 символів; lowercase, uppercase, digits, symbols |
+| Password history | 5 |
+| Temporary password validity | 3 дні |
+| Account recovery | лише адміністратор (`AccountRecovery.NONE`) |
+| User-existence errors | приховані (`PreventUserExistenceErrors: ENABLED`) |
+| Auth flow | SRP (`ALLOW_USER_SRP_AUTH`) + refresh token (`ALLOW_REFRESH_TOKEN_AUTH`) |
 | OAuth / Hosted UI | вимкнено |
-| Access token | 30 хвилин |
+| Access token | 15 хвилин |
+| Refresh token | 7 днів |
+| Refresh-token rotation | вимкнено |
+| Token revocation | увімкнено для App Client |
 | Група доступу | `teachers` |
 | Username | фактичний username акаунта; email не є alias автоматично |
 
@@ -139,15 +152,20 @@ token.
 
 ### 2.4. Термін дії та відновлення сесії
 
-- Access token діє 30 хвилин.
+- Access token діє 15 хвилин.
+- Refresh token діє 7 днів; refresh-token rotation вимкнено.
 - Backend не має власного endpoint-а refresh або logout.
 - Оновлення токена виконує Cognito SDK на фронтенді.
 - Після `401` слід спробувати оновити сесію, а якщо це неможливо — повернути
   викладача на екран входу.
+- Після завершення refresh token користувачу може знадобитися повторний вхід.
 - Після зміни групи в Cognito вже виданий access token може містити старі групи
   до завершення терміну дії. Потрібен новий токен.
 - Вихід із фронтенду не відкликає вже виданий access token. Не зберігайте токени
   довше, ніж потрібно, і не логуйте їх.
+- Ці token settings реалізовані локально, але не задеплоєні в AWS. Frontend
+  authentication і token-refresh behavior окремо не перевірялися; існуючу
+  інтеграцію треба перевірити до deployment.
 
 ### 2.5. Заголовок авторизації
 
@@ -159,6 +177,29 @@ Authorization: Bearer <accessToken>
 - Передається саме access token.
 - Cookie-авторизація не використовується.
 - Токен має бути виданий для налаштованого User Pool і App Client.
+
+### 2.6. Паролі, recovery та user enumeration (P4-03.5)
+
+- Password history — **5**. Коли Cognito застосовує policy, останні п'ять
+  паролів не можна повторно використати. Наявні паролі не скидаються
+  автоматично.
+- Temporary password validity — **3 дні**. Якщо тимчасовий пароль прострочений,
+  потрібне втручання адміністратора.
+- Account recovery — **лише адміністратор** (`AccountRecovery.NONE`).
+  Self-service «Forgot password» у Cognito вимкнений. Не пропонуйте
+  self-service recovery у фронтенді; скеровуйте викладача до авторизованого
+  адміністратора.
+- `PreventUserExistenceErrors: ENABLED` означає, що помилки входу мають
+  оброблятися узагальнено. Не показуйте різні повідомлення залежно від того, чи
+  існує акаунт, і не робіть висновків про наявність користувача з тексту помилки.
+  Це зменшує information disclosure, але не є гарантією проти всіх методів
+  enumeration.
+- Існуюча frontend-обробка помилок може потребувати перевірки. Реальні Cognito
+  login, password change, password reset, temporary-password expiry і recovery
+  flow не тестувалися.
+- Ці налаштування реалізовані локально, але не задеплоєні в AWS. Адміністратор
+  потребує відповідних permissions і окремо затвердженої процедури recovery;
+  administrative recovery API або frontend recovery UI не реалізовані.
 
 ## 3. `GET /health`
 
@@ -330,7 +371,8 @@ XSS в admin-інтерфейсі викладача.
 
 Gateway-generated помилки, зокрема `500` від Lambda throttling, можуть не
 містити CORS-заголовків. У браузері це може виглядати як мережева помилка, а не
-як HTTP `500`.
+як HTTP `500`. Заголовки, які додає Lambda (зокрема `cache-control: no-store` і
+`content-type`), також не гарантуються для gateway-generated відповідей.
 
 **Важливо:** у `POST /students` немає idempotency key. Не робіть автоматичний
 retry `POST /students` після `500`, `429`, таймауту або мережевої помилки:
@@ -540,6 +582,12 @@ gateway-generated `500` від Lambda throttling. Деталі не розкри
 Для `POST /students` не робіть автоматичний retry після таймауту, `429` або
 `500` без окремого рішення щодо ідемпотентності.
 
+Cognito authentication errors (sign-in, password change, password history,
+recovery) обробляйте узагальнено: не розкривайте, чи існує акаунт, і не
+пропонуйте self-service password recovery, оскільки `AccountRecovery.NONE`
+вимикає його. Для відновлення доступу скеровуйте викладача до авторизованого
+адміністратора.
+
 ## 7. CORS
 
 CORS налаштований нативно на API Gateway HTTP API. Окремого `OPTIONS`-маршруту
@@ -641,10 +689,11 @@ CORS-заголовків.
   використовуйте backoff, для `POST /students` не повторюйте автоматично.
 - `GET`-запити зазвичай можна повторити з backoff.
 
-Post-deploy перевірка: під контрольованим навантаженням підтвердити, що
-перевищення API Gateway ліміту дає `429`, а вичерпання Lambda concurrency може
-дати `500`; обидві відповіді мають містити CORS-заголовки для дозволеного
-origin. Локальні тести перевіряють лише синтезовану конфігурацію.
+Post-deploy перевірка: під контрольованим навантаженням зафіксувати фактичні
+статуси, заголовки й браузерно-видиму поведінку для `429` і для
+gateway-generated `500` від Lambda throttling. Не припускайте, що ці відповіді
+містять CORS-заголовки: API Gateway може згенерувати їх без CORS. Локальні тести
+перевіряють лише синтезовану конфігурацію.
 
 ## 9. Що фронтенд не повинен робити
 
@@ -688,7 +737,8 @@ origin. Локальні тести перевіряють лише синтез
     retry `POST /students`.
 11. Перевірити, що Next.js працює на `http://localhost:3000` і preflight до
     `/students` та `/admin/students` проходить (CORS уже налаштований).
-12. Після деплою перевірити `429`, `500` від Lambda throttling і CORS на цих
-    відповідях під контрольованим навантаженням.
+12. Після деплою під контрольованим навантаженням зафіксувати фактичні статуси,
+    заголовки й браузерно-видиму поведінку для `429` і gateway-generated `500`;
+    не припускати наявність CORS-заголовків.
 13. Рендерити `fullName` і `group` лише як текст із output encoding; не
     використовувати raw HTML.

@@ -15,6 +15,8 @@ export const jsonResponse = (
   statusCode,
   headers: {
     'content-type': 'application/json',
+    // JSON responses can contain student PII; never allow caching.
+    'cache-control': 'no-store',
   },
   body: JSON.stringify(body),
 });
