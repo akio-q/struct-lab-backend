@@ -1,19 +1,17 @@
 # Dev deployment: environment pinning and safeguards
 
-**Статус:** P4-01 і P4-02 (P4-02.1–P4-02.4) реалізовано й перевірено локально;
-P4-02.5 security review — PASS. P4-03.1–P4-03.3 змерджено в main. P4-03.4
-Cognito Token Security і P4-03.5 Cognito Account Security реалізовано,
-перевірено й запушено в `origin/feat/cognito-account-security`; у main ще не
-змерджено. P4-03.6 Final Review — фінальний security audit PASS; коригувальні
-зміни очікують фінального прийняття. Наступна запланована задача після
-прийняття й мерджу P4-03 — P4-04 Observability & Cost Control.
+**Статус:** P4-01, P4-02 і P4-03 завершено; P4-03 змерджено в main через PR #4
+(merge commit `8314271`). P4-04 Observability & Cost Control реалізовано й
+перевірено локально: три explicit CloudWatch Log Groups із 7-day retention і
+чотири standard alarms без automatic notifications.
 У межах цих задач жодного AWS API-виклику, `cdk bootstrap`, `cdk diff`,
 `cdk deploy` або `cdk destroy` не виконувалося; AWS-ресурсів ще не створено і
 реальні Cognito users не створювалися, password history і account recovery не
 перевірялися. Quota snapshot у розділі 5 отриманий
 вручну поза цим workflow. Акаунт залишається на AWS Free Plan; реальні грошові
 витрати не передбачені, платні функції не вмикаються без окремого схвалення, але
-AWS credits можуть витрачатися.
+AWS credits можуть витрачатися, зокрема на CloudWatch Logs ingestion/storage та
+alarms після free allowance.
 
 Цей документ описує зафіксоване dev-середовище, локальні перевірки та безпечні
 кроки для майбутнього деплою. Він не є дозволом виконувати деплой: кожен
@@ -323,12 +321,13 @@ pnpm synth
 
 Не вимикайте перевірку в коді, щоб обійти це обмеження.
 
-## 7. Майбутні кроки деплою (не виконано в P4-01–P4-03.6)
+## 7. Майбутні кроки деплою (не виконано в P4-01–P4-04)
 
 Наведені команди призначені для наступних задач Фази 4 після окремого
-схвалення. P4-01, P4-02 і P4-03 їх **не виконували**. P4-03.6 Final Review
-завершив security audit; P4-04 Observability & Cost Control — наступна
-запланована задача після прийняття й мерджу P4-03.
+схвалення. P4-01, P4-02, P4-03 і P4-04 їх **не виконували**. P4-04
+Observability & Cost Control реалізовано локально; наступний крок — Code Review,
+потім **P4-05 Pre-deployment Verification**. **P4-06 AWS Deployment**
+виконується лише після окремого явного схвалення.
 
 1. Встановити/налаштувати AWS CLI v2 і profile `structlab-dev` з регіоном
    `eu-north-1`.
@@ -442,7 +441,7 @@ pnpm synth
 - Не запускайте `cdk destroy` на середовищі, де є дані, без окремого
   runbook і схвалення.
 
-## 9. Межі P4-01, P4-02 і P4-03.1–P4-03.6
+## 9. Межі P4-01–P4-04
 
 P4-01 не додає throttling, WAF, budgets, alarms, PITR, deletion protection, MFA
 або інші задачі Фази 4. P4-02.1 додає application-level request hardening для
@@ -498,8 +497,16 @@ P4-03.5 завершує інфраструктурні зміни P4-03. P4-03.
 security audit PASS. Коригувальні зміни LOW-01–LOW-04 та INFO-03 не додають
 AWS-ресурсів, не змінюють logical IDs і не послаблюють deployment restrictions.
 LOW-04 додає `cache-control: no-store` до Lambda JSON responses, тому Lambda
-asset hash може змінитися; це не інфраструктурна зміна. P4-04 Observability &
-Cost Control — наступна запланована задача після прийняття й мерджу P4-03.
+asset hash може змінитися; це не інфраструктурна зміна.
+
+P4-04 додає лише три explicit CloudWatch Log Groups (7-day retention,
+`RemovalPolicy.DESTROY`) і чотири standard-resolution alarms без actions.
+Alarm-и: `Errors` для трьох Lambda та `5xx` для HTTP API з dimensions `ApiId` і
+`Stage`. SNS, email subscriptions, AWS Budgets, dashboards, custom metrics,
+detailed API Gateway metrics, high-resolution metrics, throttling/concurrency
+changes, Lambda handler/IAM changes та додаткові logging services не додані.
+Alarm-и не надсилають автоматичних notifications; їх треба перевіряти вручну в
+CloudWatch. AWS deployment не виконувався.
 
 ## 10. Data governance (P4-03.1)
 
@@ -902,7 +909,8 @@ overrides не використовувалися.
   deployment нової конфігурації.
 - Локальний synth підтверджує лише конфігурацію, а не фактичну Cognito
   authentication, expiration або revocation поведінку.
-- Ресурсний склад стека не змінився: 25 ресурсів, як і до P4-03.4.
+- На момент P4-03.4 стек мав 25 ресурсів; P4-04 додає 7 ресурсів, поточний
+  synth — 32.
 
 ### 13.8. Cognito account security
 
@@ -939,7 +947,8 @@ overrides не використовувалися.
 - Реальні Cognito login, password reset, temporary-password expiry і frontend
   recovery flow не тестувалися.
 - Локальний synth підтверджує лише конфігурацію, а не фактичну поведінку AWS.
-- Ресурсний склад стека не змінився: 25 ресурсів, як і до P4-03.5.
+- На момент P4-03.5 стек мав 25 ресурсів; P4-04 додає 7 ресурсів, поточний
+  synth — 32.
 
 ## 14. AWS Free Plan і cost constraints
 
@@ -974,9 +983,31 @@ overrides не використовувалися.
 - Мета «нуль реальних грошових витрат» є проєктним обмеженням, а не гарантією
   відсутності будь-якого списання credits.
 
+### 14.1. Observability (P4-04)
+
+- Три explicit CloudWatch Log Groups для Lambda мають 7-day retention і
+  `RemovalPolicy.DESTROY`. Видалення відповідного CloudFormation resource
+  видаляє історію log group.
+- Чотири standard-resolution alarms: `Errors` для health, create-student і
+  list-students Lambda та `5xx` для HTTP API (`AWS/ApiGateway`, dimensions
+  `ApiId` і `Stage`).
+- Alarm-и не мають SNS, email subscriptions, alarm actions або automatic
+  notifications. Стан перевіряється вручну в CloudWatch.
+- Немає AWS Budgets resources, dashboards, custom metrics, detailed API Gateway
+  metrics, high-resolution metrics, додаткових logging services або змін
+  throttling/Lambda concurrency.
+- CloudWatch Logs ingestion/storage і standard alarms можуть витрачати AWS
+  credits після free allowance. Нульова вартість не гарантується.
+- Логи не повинні містити ПІБ студентів, request bodies, токени або інші
+  чутливі дані; logging payloads не змінювалися.
+- Перед deployment обов'язково перевірити AWS Free Plan, Billing і credits,
+  CloudWatch quotas та актуальні Lambda/API quotas. Рекомендований ручний AWS
+  Budget перевіряється після окремого схвалення; budget resource у стеку
+  відсутній.
+
 ## 15. Future production requirements (out of scope)
 
-Наступні теми не входять у P4-03.1–P4-03.5 і потребують окремого
+Наступні теми не входять у P4-03.1–P4-03.6 або P4-04 і потребують окремого
 проєктування, privacy/security review і схвалення:
 
 - обробка реальних персональних даних студентів;

@@ -8,6 +8,7 @@ import { StructLabStack } from '../lib/struct-lab-stack';
 interface LambdaResource {
   Properties?: {
     Description?: string;
+    FunctionName?: string;
     Runtime?: string;
     Handler?: string;
     MemorySize?: number;
@@ -15,9 +16,40 @@ interface LambdaResource {
     Environment?: {
       Variables?: Record<string, unknown>;
     };
+    LoggingConfig?: {
+      LogGroup?: string;
+    };
     Role?: {
       'Fn::GetAtt'?: [string, string];
     };
+  };
+}
+
+interface LogGroupResource {
+  DeletionPolicy?: string;
+  Properties?: {
+    LogGroupName?: string;
+    RetentionInDays?: number;
+  };
+}
+
+interface AlarmResource {
+  Properties?: {
+    AlarmActions?: unknown[];
+    OKActions?: unknown[];
+    InsufficientDataActions?: unknown[];
+    MetricName?: string;
+    Namespace?: string;
+    Dimensions?: Array<{
+      Name?: string;
+      Value?: unknown;
+    }>;
+    Statistic?: string;
+    Period?: number;
+    EvaluationPeriods?: number;
+    Threshold?: number;
+    ComparisonOperator?: string;
+    TreatMissingData?: string;
   };
 }
 
@@ -194,6 +226,7 @@ interface TaggableResource {
   };
 }
 
+const HEALTH_DESCRIPTION = 'Health check handler for the StructLab backend';
 const CREATE_DESCRIPTION = 'Creates a student in DynamoDB';
 const LIST_DESCRIPTION =
   'Lists students with cursor-based pagination (teacher-only)';
@@ -330,9 +363,9 @@ describe('StructLabStack', () => {
     >;
 
     // `Template.fromStack` omits the `AWS::CDK::Metadata` resource that appears
-    // in the synthesized `cdk.out` template, so this inventory has 24 entries
-    // instead of the 25 resources reported by `cdk synth`.
-    expect(Object.keys(resources)).toHaveLength(24);
+    // in the synthesized `cdk.out` template, so this inventory has 31 entries
+    // instead of the 32 resources reported by `cdk synth`.
+    expect(Object.keys(resources)).toHaveLength(31);
 
     const counts: Record<string, number> = {};
     for (const resource of Object.values(resources)) {
@@ -345,6 +378,7 @@ describe('StructLabStack', () => {
       'AWS::ApiGatewayV2::Integration': 3,
       'AWS::ApiGatewayV2::Route': 3,
       'AWS::ApiGatewayV2::Stage': 1,
+      'AWS::CloudWatch::Alarm': 4,
       'AWS::Cognito::UserPool': 1,
       'AWS::Cognito::UserPoolClient': 1,
       'AWS::Cognito::UserPoolGroup': 1,
@@ -353,6 +387,7 @@ describe('StructLabStack', () => {
       'AWS::IAM::Role': 3,
       'AWS::Lambda::Function': 3,
       'AWS::Lambda::Permission': 3,
+      'AWS::Logs::LogGroup': 3,
     });
   });
 
@@ -445,6 +480,114 @@ describe('StructLabStack', () => {
       expect(lambda.Properties?.Runtime).toBe('nodejs22.x');
       expect(lambda.Properties?.Handler).toBe('index.handler');
       expect(lambda.Properties?.MemorySize).toBe(128);
+    }
+  });
+
+  it('creates explicit 7-day log groups bound to each Lambda without fixed function names', () => {
+    template.resourceCountIs('AWS::Logs::LogGroup', 3);
+
+    const expected = [
+      {
+        description: HEALTH_DESCRIPTION,
+        logGroupName: `/aws/lambda/${DEV_ENVIRONMENT.stackName}-health`,
+      },
+      {
+        description: CREATE_DESCRIPTION,
+        logGroupName: `/aws/lambda/${DEV_ENVIRONMENT.stackName}-create-student`,
+      },
+      {
+        description: LIST_DESCRIPTION,
+        logGroupName: `/aws/lambda/${DEV_ENVIRONMENT.stackName}-list-students`,
+      },
+    ];
+
+    for (const { description, logGroupName } of expected) {
+      const lambda = findLambda(description);
+      const logGroupEntry = Object.entries(
+        getResources<LogGroupResource>('AWS::Logs::LogGroup'),
+      ).find(
+        ([, candidate]) => candidate.Properties?.LogGroupName === logGroupName,
+      );
+
+      if (!logGroupEntry) {
+        throw new Error(`Log group not found: ${logGroupName}`);
+      }
+
+      const [logGroupLogicalId, logGroup] = logGroupEntry;
+
+      expect(lambda.Properties?.FunctionName).toBeUndefined();
+      expect(lambda.Properties?.LoggingConfig?.LogGroup).toEqual({
+        Ref: logGroupLogicalId,
+      });
+      expect(logGroup.Properties?.RetentionInDays).toBe(7);
+      expect(logGroup.DeletionPolicy).toBe('Delete');
+    }
+  });
+
+  it('creates four standard alarms without notification actions', () => {
+    template.resourceCountIs('AWS::CloudWatch::Alarm', 4);
+
+    const alarms = Object.values(
+      getResources<AlarmResource>('AWS::CloudWatch::Alarm'),
+    );
+
+    for (const alarm of alarms) {
+      expect(alarm.Properties?.Period).toBe(300);
+      expect(alarm.Properties?.EvaluationPeriods).toBe(1);
+      expect(alarm.Properties?.Threshold).toBe(1);
+      expect(alarm.Properties?.ComparisonOperator).toBe(
+        'GreaterThanOrEqualToThreshold',
+      );
+      expect(alarm.Properties?.TreatMissingData).toBe('notBreaching');
+      expect(alarm.Properties?.AlarmActions).toBeUndefined();
+      expect(alarm.Properties?.OKActions).toBeUndefined();
+      expect(alarm.Properties?.InsufficientDataActions).toBeUndefined();
+    }
+
+    const lambdaAlarms = alarms.filter(
+      (alarm) => alarm.Properties?.Namespace === 'AWS/Lambda',
+    );
+
+    expect(lambdaAlarms).toHaveLength(3);
+
+    for (const alarm of lambdaAlarms) {
+      expect(alarm.Properties?.MetricName).toBe('Errors');
+      expect(alarm.Properties?.Statistic).toBe('Sum');
+      expect(alarm.Properties?.Dimensions).toEqual([
+        { Name: 'FunctionName', Value: expect.anything() },
+      ]);
+    }
+
+    const apiAlarm = alarms.find(
+      (alarm) => alarm.Properties?.Namespace === 'AWS/ApiGateway',
+    );
+    const apiLogicalId = Object.keys(
+      getResources<unknown>('AWS::ApiGatewayV2::Api'),
+    )[0];
+
+    expect(apiAlarm).toBeDefined();
+    expect(apiAlarm?.Properties?.MetricName).toBe('5xx');
+    expect(apiAlarm?.Properties?.Statistic).toBe('Sum');
+    expect(
+      Object.fromEntries(
+        (apiAlarm?.Properties?.Dimensions ?? []).map((dimension) => [
+          dimension.Name,
+          dimension.Value,
+        ]),
+      ),
+    ).toEqual({
+      ApiId: { Ref: apiLogicalId },
+      Stage: '$default',
+    });
+  });
+
+  it('does not add notifications, budgets or dashboards', () => {
+    for (const type of [
+      'AWS::SNS::Topic',
+      'AWS::Budgets::Budget',
+      'AWS::CloudWatch::Dashboard',
+    ]) {
+      template.resourceCountIs(type, 0);
     }
   });
 
