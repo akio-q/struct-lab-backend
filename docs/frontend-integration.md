@@ -3,17 +3,20 @@
 **Статус:** P4-01 і P4-02 (P4-02.1 request hardening, P4-02.2 CORS, P4-02.3
 throttling і P4-02.4 concurrency awareness) реалізовано й перевірено локально;
 P4-02.5 security review — PASS. P4-03.4 Cognito Token Security і P4-03.5
-Cognito Account Security реалізовано локально, але AWS-деплой ще не виконувався,
-тому реальної базової URL-адреси поки немає. Після деплою її треба взяти зі
-stack output `HttpApiUrl`. Поведінка frontend authentication, token-refresh,
-password history і account recovery окремо не перевірялася.
+Cognito Account Security реалізовано, перевірено й запушено в
+`origin/feat/cognito-account-security`; P4-03.6 security audit — PASS. AWS-деплой
+ще не виконувався, тому реальної базової URL-адреси поки немає. Після деплою її
+треба взяти зі stack output `HttpApiUrl`. Поведінка frontend authentication,
+token-refresh, password history і account recovery окремо не перевірялася.
 
 Цей документ описує лише те, що реально реалізовано в коді. Він не додає
 endpoint-ів, полів або поведінки, яких немає в backend.
 
 ## 1. Загальні правила
 
-- Усі відповіді API мають `content-type: application/json`.
+- JSON-відповіді, сформовані Lambda через спільний `jsonResponse`, мають
+  `content-type: application/json` і `cache-control: no-store`. Це не
+  поширюється на помилки, які генерує API Gateway без участі Lambda.
 - Базовий URL: значення output `HttpApiUrl`, наприклад
   `https://<api-id>.execute-api.<region>.amazonaws.com`.
 - Шляхи вказуються без завершального слеша: `/students`, `/admin/students`.
@@ -368,7 +371,8 @@ XSS в admin-інтерфейсі викладача.
 
 Gateway-generated помилки, зокрема `500` від Lambda throttling, можуть не
 містити CORS-заголовків. У браузері це може виглядати як мережева помилка, а не
-як HTTP `500`.
+як HTTP `500`. Заголовки, які додає Lambda (зокрема `cache-control: no-store` і
+`content-type`), також не гарантуються для gateway-generated відповідей.
 
 **Важливо:** у `POST /students` немає idempotency key. Не робіть автоматичний
 retry `POST /students` після `500`, `429`, таймауту або мережевої помилки:
@@ -685,10 +689,11 @@ CORS-заголовків.
   використовуйте backoff, для `POST /students` не повторюйте автоматично.
 - `GET`-запити зазвичай можна повторити з backoff.
 
-Post-deploy перевірка: під контрольованим навантаженням підтвердити, що
-перевищення API Gateway ліміту дає `429`, а вичерпання Lambda concurrency може
-дати `500`; обидві відповіді мають містити CORS-заголовки для дозволеного
-origin. Локальні тести перевіряють лише синтезовану конфігурацію.
+Post-deploy перевірка: під контрольованим навантаженням зафіксувати фактичні
+статуси, заголовки й браузерно-видиму поведінку для `429` і для
+gateway-generated `500` від Lambda throttling. Не припускайте, що ці відповіді
+містять CORS-заголовки: API Gateway може згенерувати їх без CORS. Локальні тести
+перевіряють лише синтезовану конфігурацію.
 
 ## 9. Що фронтенд не повинен робити
 
@@ -732,7 +737,8 @@ origin. Локальні тести перевіряють лише синтез
     retry `POST /students`.
 11. Перевірити, що Next.js працює на `http://localhost:3000` і preflight до
     `/students` та `/admin/students` проходить (CORS уже налаштований).
-12. Після деплою перевірити `429`, `500` від Lambda throttling і CORS на цих
-    відповідях під контрольованим навантаженням.
+12. Після деплою під контрольованим навантаженням зафіксувати фактичні статуси,
+    заголовки й браузерно-видиму поведінку для `429` і gateway-generated `500`;
+    не припускати наявність CORS-заголовків.
 13. Рендерити `fullName` і `group` лише як текст із output encoding; не
     використовувати raw HTML.

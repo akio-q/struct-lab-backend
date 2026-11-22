@@ -3,8 +3,37 @@ import { describe, expect, it } from 'vitest';
 import {
   getHeader,
   isJsonContentType,
+  jsonResponse,
   readRequestBody,
 } from '../src/lib/http';
+
+describe('jsonResponse', () => {
+  it('returns JSON with no-store cache protection', () => {
+    const response = jsonResponse(200, { status: 'ok' });
+
+    expect(response).toEqual({
+      statusCode: 200,
+      headers: {
+        'content-type': 'application/json',
+        'cache-control': 'no-store',
+      },
+      body: '{"status":"ok"}',
+    });
+  });
+
+  it('preserves error status and body while applying no-store', () => {
+    const response = jsonResponse(400, { error: 'Bad request' });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.headers).toMatchObject({
+      'content-type': 'application/json',
+      'cache-control': 'no-store',
+    });
+    expect(JSON.parse(response.body ?? 'null')).toEqual({
+      error: 'Bad request',
+    });
+  });
+});
 
 describe('getHeader', () => {
   it('looks up header names case-insensitively', () => {

@@ -8,25 +8,30 @@
 concurrency.
 
 > **Статус:** P4-01 і P4-02 (P4-02.1–P4-02.4) реалізовано й перевірено локально;
-> P4-02.5 security review — PASS. P4-03.1 policy для даних, retention і recovery,
-> P4-03.2 DynamoDB hardening, P4-03.3 Cognito lifecycle, P4-03.4 Cognito Token
-> Security та P4-03.5 Cognito Account Security реалізовано й перевірено
-> локально. Наступний запланований крок — P4-03.6 Final Review. Деплою в AWS,
-> bootstrap, `cdk diff`, реальних integration-тестів, перевірки автентифікації,
-> password history, account recovery та recovery Cognito ще не було. Акаунт
-> залишається на AWS Free Plan; реальні грошові витрати не передбачені, але AWS
-> credits можуть витрачатися.
+> P4-02.5 security review — PASS. P4-03.1–P4-03.3 змерджено в main. P4-03.4
+> Cognito Token Security і P4-03.5 Cognito Account Security реалізовано,
+> перевірено, закомічено й запушено в `origin/feat/cognito-account-security`;
+> у main ще не змерджено. P4-03.6 Final Review — фінальний security audit PASS;
+> коригувальні зміни очікують фінального прийняття. Наступна запланована задача
+> після прийняття й змердження P4-03 — P4-04 Observability & Cost Control.
+> Деплою в AWS, bootstrap, `cdk diff`, реальних integration-тестів, перевірки
+> автентифікації, password history, account recovery та recovery Cognito ще не
+> було. Акаунт залишається на AWS Free Plan; реальні грошові витрати не
+> передбачені, але AWS credits можуть витрачатися.
 
 ## P4-03 roadmap
 
 | Підзадача | Зміст | Статус |
 | --- | --- | --- |
-| P4-03.1 | Data Governance, Retention & Recovery | Виконано; review PASS |
-| P4-03.2 | DynamoDB Hardening | Виконано; review PASS |
+| P4-03.1 | Data Governance, Retention & Recovery | Змерджено в main |
+| P4-03.2 | DynamoDB Hardening | Змерджено в main |
 | P4-03.3 | Cognito Lifecycle | Змерджено в main через PR #3 |
-| P4-03.4 | Cognito Token Security | Виконано локально; Code Review PASS; закомічено локально, не запушено і не змерджено |
-| P4-03.5 | Cognito Account Security | Реалізовано локально; технічний review PASS; очікує фінального прийняття |
-| P4-03.6 | Final Review | Наступна запланована |
+| P4-03.4 | Cognito Token Security | Реалізовано, перевірено, закомічено й запушено в `origin/feat/cognito-account-security`; не змерджено |
+| P4-03.5 | Cognito Account Security | Реалізовано, перевірено, закомічено й запушено в `origin/feat/cognito-account-security`; не змерджено |
+| P4-03.6 | Final Review | Фінальний security audit PASS; коригувальні зміни очікують фінального прийняття |
+
+Наступна запланована задача після прийняття й змердження P4-03 — **P4-04
+Observability & Cost Control**.
 
 ## Поточний API
 
@@ -1177,19 +1182,24 @@ AWS-ключів. Stack має фіксовані `account`/`region`; без cre
 - [`docs/phase-2-plan.md`](docs/phase-2-plan.md) — історичний план Фази 2:
   DynamoDB, публічний `POST /students`, cursor-based пагінація та підготовка
   admin-обробника.
-- [`docs/phase-3-plan.md`](docs/phase-3-plan.md) — фактична архітектура Фази 3:
+- [`docs/phase-3-plan.md`](docs/phase-3-plan.md) — історичний план Фази 3:
   Cognito, JWT authorizer, teacher guard, публічна реєстрація та security review.
+  Поточна конфігурація описана в цьому README, `docs/deployment.md` і
+  `docs/frontend-integration.md`.
 - [`docs/frontend-integration.md`](docs/frontend-integration.md) — точний
   контракт для фронтенду: запити, відповіді, помилки, пагінація, SRP-логін,
   CORS і throttling.
 
 ## Наступні кроки
 
-1. P4-03.3 Cognito lifecycle, P4-03.4 Cognito Token Security і P4-03.5 Cognito
-   Account Security виконано локально; наступний запланований крок — P4-03.6
-   Final Review. Подальші інфраструктурні зміни потребують окремого схвалення.
-   Для майбутнього деплою потрібні AWS CLI/SSO, перевірка target і bootstrap
-   після окремого схвалення.
+1. P4-03.1–P4-03.3 змерджено в main. P4-03.4 Cognito Token Security і P4-03.5
+   Cognito Account Security закомічено й запушено в
+   `origin/feat/cognito-account-security`; вони ще не змерджені. P4-03.6 Final
+   Review — фінальний security audit PASS; коригувальні зміни очікують
+   фінального прийняття. Після мерджу P4-03 наступна задача — P4-04
+   Observability & Cost Control. Подальші інфраструктурні зміни потребують
+   окремого схвалення. Для майбутнього деплою потрібні AWS CLI/SSO, перевірка
+   target і bootstrap після окремого схвалення.
 2. Додати HTTPS-origin задеплоєного фронтенду в `corsAllowedOrigins`.
 3. Додати per-IP rate limiting, WAF і CAPTCHA для публічної реєстрації.
 4. Перед деплоєм повторно перевірити Lambda account quotas; reserved і

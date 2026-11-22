@@ -1,10 +1,12 @@
 # Dev deployment: environment pinning and safeguards
 
 **Статус:** P4-01 і P4-02 (P4-02.1–P4-02.4) реалізовано й перевірено локально;
-P4-02.5 security review — PASS. P4-03.1 documentation-only policy для даних,
-retention і recovery, P4-03.2 DynamoDB hardening, P4-03.3 Cognito lifecycle,
-P4-03.4 Cognito Token Security та P4-03.5 Cognito Account Security реалізовано
-локально; наступний запланований крок — P4-03.6 Final Review.
+P4-02.5 security review — PASS. P4-03.1–P4-03.3 змерджено в main. P4-03.4
+Cognito Token Security і P4-03.5 Cognito Account Security реалізовано,
+перевірено й запушено в `origin/feat/cognito-account-security`; у main ще не
+змерджено. P4-03.6 Final Review — фінальний security audit PASS; коригувальні
+зміни очікують фінального прийняття. Наступна запланована задача після
+прийняття й мерджу P4-03 — P4-04 Observability & Cost Control.
 У межах цих задач жодного AWS API-виклику, `cdk bootstrap`, `cdk diff`,
 `cdk deploy` або `cdk destroy` не виконувалося; AWS-ресурсів ще не створено і
 реальні Cognito users не створювалися, password history і account recovery не
@@ -321,11 +323,12 @@ pnpm synth
 
 Не вимикайте перевірку в коді, щоб обійти це обмеження.
 
-## 7. Майбутні кроки деплою (не виконано в P4-01 і P4-02)
+## 7. Майбутні кроки деплою (не виконано в P4-01–P4-03.6)
 
 Наведені команди призначені для наступних задач Фази 4 після окремого
-схвалення. P4-01 і P4-02 їх **не виконували**; P4-03 — наступна запланована
-задача.
+схвалення. P4-01, P4-02 і P4-03 їх **не виконували**. P4-03.6 Final Review
+завершив security audit; P4-04 Observability & Cost Control — наступна
+запланована задача після прийняття й мерджу P4-03.
 
 1. Встановити/налаштувати AWS CLI v2 і profile `structlab-dev` з регіоном
    `eu-north-1`.
@@ -439,7 +442,7 @@ pnpm synth
 - Не запускайте `cdk destroy` на середовищі, де є дані, без окремого
   runbook і схвалення.
 
-## 9. Межі P4-01, P4-02, P4-03.1, P4-03.2, P4-03.3, P4-03.4 і P4-03.5
+## 9. Межі P4-01, P4-02 і P4-03.1–P4-03.6
 
 P4-01 не додає throttling, WAF, budgets, alarms, PITR, deletion protection, MFA
 або інші задачі Фази 4. P4-02.1 додає application-level request hardening для
@@ -491,8 +494,12 @@ recovery UI, messaging infrastructure і automated account-management scripts
 не додаються. Це локальна зміна; AWS deploy, реальний login, password reset,
 temporary-password expiry і recovery testing не виконувалися.
 
-P4-03.5 завершує інфраструктурні зміни P4-03. P4-03.6 Final Review не повинен
-змінювати інфраструктуру без окремого схвалення.
+P4-03.5 завершує інфраструктурні зміни P4-03. P4-03.6 Final Review — фінальний
+security audit PASS. Коригувальні зміни LOW-01–LOW-04 та INFO-03 не додають
+AWS-ресурсів, не змінюють logical IDs і не послаблюють deployment restrictions.
+LOW-04 додає `cache-control: no-store` до Lambda JSON responses, тому Lambda
+asset hash може змінитися; це не інфраструктурна зміна. P4-04 Observability &
+Cost Control — наступна запланована задача після прийняття й мерджу P4-03.
 
 ## 10. Data governance (P4-03.1)
 

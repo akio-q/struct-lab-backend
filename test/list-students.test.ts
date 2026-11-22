@@ -51,6 +51,10 @@ describe('GET /admin/students handler', () => {
 
     expect(response.statusCode).toBe(200);
     expect(listStudents).toHaveBeenCalledWith({ limit: 20 });
+    expect(response.headers).toMatchObject({
+      'content-type': 'application/json',
+      'cache-control': 'no-store',
+    });
     expect(JSON.parse(response.body ?? 'null')).toEqual({
       items: [student],
       nextCursor: null,
