@@ -17,6 +17,11 @@ import {
 } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpUserPoolAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import {
+  Alarm,
+  ComparisonOperator,
+  TreatMissingData,
+} from 'aws-cdk-lib/aws-cloudwatch';
 import { AccountRecovery, FeaturePlan, UserPool } from 'aws-cdk-lib/aws-cognito';
 import {
   AttributeType,
@@ -27,6 +32,7 @@ import {
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { Runtime } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
+import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import type { Construct } from 'constructs';
 
 import { TEACHERS_GROUP_NAME } from '../src/constants';
@@ -197,7 +203,40 @@ export class StructLabStack extends Stack {
       groupName: TEACHERS_GROUP_NAME,
     });
 
+    const healthLogGroupName = `/aws/lambda/${this.stackName}-health`;
+    const createStudentLogGroupName =
+      `/aws/lambda/${this.stackName}-create-student`;
+    const listStudentsLogGroupName =
+      `/aws/lambda/${this.stackName}-list-students`;
+
+    const healthLogGroup = new LogGroup(this, 'HealthFunctionLogGroup', {
+      logGroupName: healthLogGroupName,
+      retention: RetentionDays.ONE_WEEK,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+
+    const createStudentLogGroup = new LogGroup(
+      this,
+      'CreateStudentFunctionLogGroup',
+      {
+        logGroupName: createStudentLogGroupName,
+        retention: RetentionDays.ONE_WEEK,
+        removalPolicy: RemovalPolicy.DESTROY,
+      },
+    );
+
+    const listStudentsLogGroup = new LogGroup(
+      this,
+      'ListStudentsFunctionLogGroup',
+      {
+        logGroupName: listStudentsLogGroupName,
+        retention: RetentionDays.ONE_WEEK,
+        removalPolicy: RemovalPolicy.DESTROY,
+      },
+    );
+
     const healthFunction = new NodejsFunction(this, 'HealthFunction', {
+      logGroup: healthLogGroup,
       description: 'Health check handler for the StructLab backend',
       entry: join(__dirname, '..', 'src', 'handlers', 'health.ts'),
       handler: 'handler',
@@ -211,6 +250,7 @@ export class StructLabStack extends Stack {
       this,
       'CreateStudentFunction',
       {
+        logGroup: createStudentLogGroup,
         description: 'Creates a student in DynamoDB',
         entry: join(__dirname, '..', 'src', 'handlers', 'create-student.ts'),
         handler: 'handler',
@@ -228,6 +268,7 @@ export class StructLabStack extends Stack {
       this,
       'ListStudentsFunction',
       {
+        logGroup: listStudentsLogGroup,
         description:
           'Lists students with cursor-based pagination (teacher-only)',
         entry: join(__dirname, '..', 'src', 'handlers', 'list-students.ts'),
@@ -298,6 +339,60 @@ export class StructLabStack extends Stack {
       throttlingRateLimit: environment.throttling.rateLimitPerSecond,
       throttlingBurstLimit: environment.throttling.burstLimit,
     };
+
+    // Standard-resolution alarms only. They have no actions and are intended
+    // for manual CloudWatch monitoring in this synthetic dev environment.
+    new Alarm(this, 'HealthFunctionErrorsAlarm', {
+      alarmDescription: 'Health Lambda invocation errors',
+      metric: healthFunction.metricErrors({
+        period: Duration.minutes(5),
+        statistic: 'Sum',
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator:
+        ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+    });
+
+    new Alarm(this, 'CreateStudentFunctionErrorsAlarm', {
+      alarmDescription: 'Create-student Lambda invocation errors',
+      metric: createStudentFunction.metricErrors({
+        period: Duration.minutes(5),
+        statistic: 'Sum',
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator:
+        ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+    });
+
+    new Alarm(this, 'ListStudentsFunctionErrorsAlarm', {
+      alarmDescription: 'List-students Lambda invocation errors',
+      metric: listStudentsFunction.metricErrors({
+        period: Duration.minutes(5),
+        statistic: 'Sum',
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator:
+        ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+    });
+
+    new Alarm(this, 'HttpApi5xxAlarm', {
+      alarmDescription: 'HTTP API 5xx responses',
+      metric: defaultStage.metricServerError({
+        period: Duration.minutes(5),
+        statistic: 'Sum',
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator:
+        ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+    });
 
     const teachersAuthorizer = new HttpUserPoolAuthorizer(
       'TeachersJwtAuthorizer',

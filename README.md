@@ -7,17 +7,14 @@
 додають request hardening, CORS, throttling і документування обмежень Lambda
 concurrency.
 
-> **Статус:** P4-01 і P4-02 (P4-02.1–P4-02.4) реалізовано й перевірено локально;
-> P4-02.5 security review — PASS. P4-03.1–P4-03.3 змерджено в main. P4-03.4
-> Cognito Token Security і P4-03.5 Cognito Account Security реалізовано,
-> перевірено, закомічено й запушено в `origin/feat/cognito-account-security`;
-> у main ще не змерджено. P4-03.6 Final Review — фінальний security audit PASS;
-> коригувальні зміни очікують фінального прийняття. Наступна запланована задача
-> після прийняття й змердження P4-03 — P4-04 Observability & Cost Control.
-> Деплою в AWS, bootstrap, `cdk diff`, реальних integration-тестів, перевірки
-> автентифікації, password history, account recovery та recovery Cognito ще не
-> було. Акаунт залишається на AWS Free Plan; реальні грошові витрати не
-> передбачені, але AWS credits можуть витрачатися.
+> **Статус:** P4-01, P4-02 і P4-03 завершено; P4-03 змерджено в main через PR #4
+> (merge commit `8314271`). P4-04 Observability & Cost Control реалізовано й
+> перевірено локально: три explicit CloudWatch Log Groups із 7-day retention і
+> чотири standard alarms без automatic notifications. Деплою в AWS, bootstrap,
+> `cdk diff`, реальних integration-тестів, перевірки автентифікації, password
+> history, account recovery та recovery Cognito ще не було. Акаунт залишається
+> на AWS Free Plan; реальні грошові витрати не передбачені, але AWS credits
+> можуть витрачатися, а log ingestion і alarms можуть споживати free allowance.
 
 ## P4-03 roadmap
 
@@ -26,12 +23,35 @@ concurrency.
 | P4-03.1 | Data Governance, Retention & Recovery | Змерджено в main |
 | P4-03.2 | DynamoDB Hardening | Змерджено в main |
 | P4-03.3 | Cognito Lifecycle | Змерджено в main через PR #3 |
-| P4-03.4 | Cognito Token Security | Реалізовано, перевірено, закомічено й запушено в `origin/feat/cognito-account-security`; не змерджено |
-| P4-03.5 | Cognito Account Security | Реалізовано, перевірено, закомічено й запушено в `origin/feat/cognito-account-security`; не змерджено |
-| P4-03.6 | Final Review | Фінальний security audit PASS; коригувальні зміни очікують фінального прийняття |
+| P4-03.4 | Cognito Token Security | Змерджено в main через PR #4 |
+| P4-03.5 | Cognito Account Security | Змерджено в main через PR #4 |
+| P4-03.6 | Final Review | Змерджено в main через PR #4 (`8314271`) |
 
-Наступна запланована задача після прийняття й змердження P4-03 — **P4-04
-Observability & Cost Control**.
+P4-04 Observability & Cost Control реалізовано локально; AWS deployment не
+виконувався.
+
+## Observability та cost control (P4-04)
+
+- Три explicit CloudWatch Log Groups для існуючих Lambda мають retention
+  **7 днів** і `RemovalPolicy.DESTROY`; видалення CloudFormation resource
+  видаляє історію відповідного log group.
+- Чотири standard-resolution alarms: `Errors` для health, create-student і
+  list-students Lambda та `5xx` для HTTP API (namespace `AWS/ApiGateway`,
+  dimensions `ApiId` і `Stage`).
+- Alarm-и не мають SNS, email, alarm actions або automatic notifications.
+  Перевірка стану виконується вручну в CloudWatch.
+- AWS Budgets, dashboards, custom metrics, detailed API Gateway metrics,
+  high-resolution metrics та додаткові logging services не додані.
+- CloudWatch Logs ingestion/storage і standard alarms можуть витрачати AWS
+  credits після free allowance; нульова вартість не гарантується.
+- Перед будь-яким deployment обов'язково перевірити AWS Free Plan, Billing і
+  credits, CloudWatch quotas та актуальні Lambda/API quotas. Рекомендований
+  ручний AWS Budget перевіряється після окремого схвалення; budget resource у
+  стеку відсутній.
+- Логи не повинні містити ПІБ студентів, request bodies, токени або інші
+  чутливі дані; logging payloads не змінювалися.
+- Після P4-04 заплановано **P4-05 Pre-deployment Verification**. **P4-06 AWS
+  Deployment** виконується лише після окремого явного схвалення.
 
 ## Поточний API
 
@@ -1192,14 +1212,12 @@ AWS-ключів. Stack має фіксовані `account`/`region`; без cre
 
 ## Наступні кроки
 
-1. P4-03.1–P4-03.3 змерджено в main. P4-03.4 Cognito Token Security і P4-03.5
-   Cognito Account Security закомічено й запушено в
-   `origin/feat/cognito-account-security`; вони ще не змерджені. P4-03.6 Final
-   Review — фінальний security audit PASS; коригувальні зміни очікують
-   фінального прийняття. Після мерджу P4-03 наступна задача — P4-04
-   Observability & Cost Control. Подальші інфраструктурні зміни потребують
-   окремого схвалення. Для майбутнього деплою потрібні AWS CLI/SSO, перевірка
-   target і bootstrap після окремого схвалення.
+1. P4-03 змерджено в main через PR #4. P4-04 Observability & Cost Control
+   реалізовано локально; наступний крок — Code Review, потім P4-05
+   Pre-deployment Verification. P4-06 AWS Deployment виконується лише після
+   окремого явного схвалення. Подальші інфраструктурні зміни потребують
+   окремого схвалення. Для деплою потрібні AWS CLI/SSO, перевірка target і
+   bootstrap після окремого схвалення.
 2. Додати HTTPS-origin задеплоєного фронтенду в `corsAllowedOrigins`.
 3. Додати per-IP rate limiting, WAF і CAPTCHA для публічної реєстрації.
 4. Перед деплоєм повторно перевірити Lambda account quotas; reserved і
