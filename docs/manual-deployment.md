@@ -8,7 +8,7 @@
 - **Deployment state:** PARTIAL — DynamoDB, Cognito, and IAM roles are configured, but the backend Lambda functions and API routes are **not deployed**. End-to-end verification has **not** been performed.
 - **Next action:** P4-07.5 — Lambda Deployment.
 
-> This is an operational runbook, not a claim that the backend is deployed. Every AWS mutation requires explicit operator approval. Do not store credentials, passwords, access keys, session tokens, JWTs, student data, or teacher usernames in this repository.
+> This is an operational runbook, not a claim that the backend is deployed. Every AWS mutation requires explicit operator approval. This repository is public: do not store credentials, passwords, access keys, session tokens, JWTs, student data, teacher usernames, email addresses, personal identifiers, or local filesystem paths in it.
 
 ## 1. Deployment approach
 
@@ -88,13 +88,13 @@ Expected identity:
 - an assumed role, **not** the root user;
 - region `eu-north-1`.
 
-If the profile uses IAM Identity Center/SSO, reauthenticate with:
+Reauthenticate the existing `structlab-dev` profile with:
 
 ```powershell
-aws sso login --profile structlab-dev
+aws login --profile structlab-dev
 ```
 
-If the profile uses another approved credential mechanism, refresh it through that mechanism. Do not paste credentials into files, chat, or shell history. If the account, region, or caller is unexpected, stop.
+Use this command for the existing profile; do not substitute a different login method. Do not paste credentials into files, chat, or shell history. If the account, region, or caller is unexpected, stop.
 
 ### Free Plan, credits, budget, and email status
 
@@ -104,8 +104,14 @@ If the profile uses another approved credential mechanism, refresh it through th
 | Plan status | `ACTIVE` |
 | Remaining credits | `$159.999971` (P4-07.4a) |
 | Plan expiration | `2027-05-12` |
-| Budget | No AWS Budget resource was created or verified. The CDK stack does not include AWS Budgets. Any budget requires separate approval. |
-| Billing email verification | Not independently verified in this checkpoint. Verify the billing contact and email-alert subscription in the AWS Billing console before relying on email notifications. No email address is stored here. |
+| Budget | `StructLab-Zero-Spend` |
+| Budget amount | `$1.00` monthly |
+| Amount used at verification | `$0.00` |
+| Budget health | `Healthy` |
+| Budget alert threshold | Actual cost > `$0.01` |
+| Budget alert recipient email | Verified (address not stored) |
+| Credits in budget calculation | Unverified |
+| Account-specific DynamoDB Free Tier usage | Unverified |
 
 Free Plan credits and allowances are finite. CloudWatch Logs, alarms, requests, and other usage can consume credits after free allowances.
 
@@ -124,7 +130,7 @@ Free Plan credits and allowances are finite. CloudWatch Logs, alarms, requests, 
 | P4-07.4d — IAM Execution Roles | Completed with documented limitations |
 | P4-07.4 — Checkpoint & Team Handoff | This document |
 | P4-07.5 — Lambda Deployment | **Next; not started** |
-| API Gateway configuration | Pending; do not start without separate approval |
+| API Gateway configuration | Pending; reuse/replacement decision deferred to P4-07.6 |
 | Backend API verification | Pending |
 | Frontend integration verification | Pending |
 | Test-resource cleanup | Pending; separate approval required |
@@ -301,12 +307,12 @@ These are policy simulations only. No Lambda was invoked and no DynamoDB data op
 | --- | --- | --- |
 | Lambda `structlab-test` | `nodejs22.x`, handler `index.handler`, last modified `2026-11-24T18:13:27Z` | Test function; not one of the planned backend functions |
 | IAM role `structlab-test-execution-role` | ARN `arn:aws:iam::677339799150:role/structlab-test-execution-role`, created `2026-11-23T12:39:56+00:00` | Do not modify or reuse for the new functions |
-| API Gateway HTTP API `tstq9li2el` | Routes `GET /health` and `GET /admin/test` | Test API; do not modify while planning the new routes |
+| API Gateway HTTP API `tstq9li2el` | Routes `GET /health` and `GET /admin/test` | Test API; do not modify before P4-07.6 approval |
 | DynamoDB table `Students` | ARN `arn:aws:dynamodb:eu-north-1:677339799150:table/Students`; `ACTIVE`; key `studentsId` (String); `5/5`; deletion protection enabled; 0 items | Legacy/test table; not the deployment target |
 | Cognito group `structlab-test-teachers` | Exactly 1 member; no IAM role | Preserve the group and membership |
 | Cognito confirmed test teacher | Single enabled, `CONFIRMED` user; username withheld | Do not reset, disable, or delete without approval |
 | CloudWatch log group `/aws/lambda/structlab-test` | Pre-existing; no retention configured | Leave in place until cleanup approval |
-| IAM user `daun` | Reported as unverified; ownership and use are not established | Do not modify, attach policies to, or delete until verified |
+| One unverified IAM user (name withheld) | Reported as unverified; ownership and use are not established | Do not modify, attach policies to, or delete until verified |
 
 No test resource was modified during the IAM or documentation checkpoint.
 
@@ -358,7 +364,7 @@ Planned API settings from the CDK reference:
 - preflight max age: 300 seconds;
 - default-stage throttling: rate 10 requests/second, burst 20.
 
-Unresolved decision: reuse the existing test API or create a separate HTTP API for the planned routes. Do not modify `tstq9li2el` until that decision and the API Gateway stage are explicitly approved. Lambda integration also requires API Gateway invoke permissions on each function.
+API reuse/replacement decision: deferred until P4-07.6. It is not a blocker for P4-07.5 Lambda deployment. Do not modify `tstq9li2el` before P4-07.6 approval. Lambda integration will require API Gateway invoke permissions on each function.
 
 ## 8. Packaging commands and expected archives
 
@@ -401,7 +407,7 @@ Known packaging limitation: the local machine used for packaging has Node.js `v2
 
 ### Frontend
 
-A local frontend repository exists at `C:\Users\User\Documents\MyDocs\programming\struct-lab`, but it contains no Cognito SDK, Amplify, SRP, Hosted UI, OAuth authorization-code, access-token, or ID-token implementation. Frontend Cognito compatibility is **NOT VERIFIED**.
+A local frontend repository was inspected read-only and contains no Cognito SDK, Amplify, SRP, Hosted UI, OAuth authorization-code, access-token, or ID-token implementation. Frontend Cognito compatibility is **NOT VERIFIED**.
 
 Do not clone, modify, or deploy the frontend. OAuth, the Cognito domain, callback URLs, and the extra auth flow remain preserved until actual frontend compatibility is established.
 
@@ -415,10 +421,10 @@ No password-based SRP login was performed. No password, JWT, or fresh access-tok
 
 | Candidate | Reason | Preconditions |
 | --- | --- | --- |
-| IAM user `daun` | Reported as unverified; ownership and use are unknown | Verify ownership and dependencies before any action |
+| One unverified IAM user (name withheld) | Reported as unverified; ownership and use are unknown | Verify ownership and dependencies before any action |
 | Lambda `structlab-test` | Test function | Remove only after the planned backend functions replace its purpose |
 | IAM role `structlab-test-execution-role` | Test execution role | Remove only after no function uses it |
-| API Gateway `tstq9li2el` | Test API with `GET /health` and `GET /admin/test` | Remove only after the planned API is accepted |
+| API Gateway `tstq9li2el` | Test API with `GET /health` and `GET /admin/test` | Remove only after the planned API is accepted in P4-07.6 |
 | DynamoDB table `Students` | Legacy/test table with 0 items | Export/backup and explicit approval; deletion protection must be disabled separately |
 | Cognito group `structlab-test-teachers` | Temporary group | Remove only after `teachers` membership is confirmed and no dependency remains |
 | CloudWatch log group `/aws/lambda/structlab-test` | Test Lambda log group | Retain until its logs are no longer needed |
@@ -435,8 +441,9 @@ No password-based SRP login was performed. No password, JWT, or fresh access-tok
 - The live DynamoDB table was created manually and is not the CDK-managed table. Its name and provisioned capacity (`10` RCU / `10` WCU) differ from the CDK on-demand reference.
 - Cognito password policy, password history, temporary password validity, account recovery, OAuth/domain, and extra auth flow differ from the CDK reference.
 - The manual IAM roles use `ManagedBy=Manual`; CDK-tagged resources would use `ManagedBy=AWS CDK`.
-- No AWS Budget or billing-email verification was completed.
-- The exact planned Lambda function names and the API Gateway reuse/new-API decision remain open.
+- The `StructLab-Zero-Spend` budget is healthy, but whether credits are included in its calculation is unverified.
+- Account-specific DynamoDB Free Tier usage remains unverified.
+- The exact planned Lambda function names remain open for confirmation in P4-07.5. The API reuse/replacement decision is deferred to P4-07.6 and does not block Lambda deployment.
 - The backend is not production-ready and must not be treated as deployed.
 
 ## 11. Exact next action
@@ -454,10 +461,10 @@ No password-based SRP login was performed. No password, JWT, or fresh access-tok
    aws dynamodb describe-table --table-name StructLabStudents-dev --profile structlab-dev --region eu-north-1
    ```
 
-2. Confirm the exact function names and the API Gateway reuse/new-API decision.
+2. Confirm the exact function names. The API reuse/replacement decision is deferred to P4-07.6 and is not required for P4-07.5.
 3. Re-run `pnpm package:lambdas` and `pnpm verify:lambdas`.
 4. Deploy exactly the three planned functions with the configuration in section 7.1 and the three dedicated IAM roles in section 5.3.
 5. Verify function state, code package, runtime, handler, memory, timeout, environment, and role attachment.
-6. Stop before API Gateway configuration unless that scope is separately approved.
+6. Stop before API Gateway configuration. The reuse/replacement decision belongs to P4-07.6.
 
 Do not invoke Lambda with student data, perform DynamoDB data operations, modify Cognito, or delete test resources as part of P4-07.5 without explicit approval.
