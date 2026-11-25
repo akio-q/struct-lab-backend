@@ -1,15 +1,15 @@
 # Manual AWS Deployment Runbook and Team Handoff
 
-- **Checkpoint:** P4-07.5
+- **Checkpoint:** P4-07.6 — COMPLETE
 - **Last updated:** 2026-11-25
 - **Repository:** <https://github.com/akio-q/struct-lab-backend>
 - **Branch:** `feat/manual-aws-deployment`
 - **Packaging commit:** `7b7f9317ec7eec9ff0fb9f4cc58d97221086f87c`
-- **Checkpoint base commit:** `b120dafb71fa608749323cdc5196625708671fc9`
-- **Deployment state:** Lambda deployment **COMPLETE**; API Gateway integration **PENDING**; Cognito JWT, real teacher authorization, valid student registration, DynamoDB persistence, pagination, and frontend integration **NOT VERIFIED**.
-- **Next action:** P4-07.6 — API Gateway Configuration.
+- **Checkpoint base commit:** `0eec989c5704d35528790c611691fb3af5a0f3c6`
+- **Deployment state:** Dev API Gateway and Lambda integration complete; all 11 HTTP smoke scenarios passed. Valid registration and authenticated end-to-end flows remain unverified.
+- **Next action:** P4-07.7 — Backend End-to-End Verification (not started).
 
-> This is an operational runbook, not a claim that the backend API is deployed or end-to-end verified. Every AWS mutation requires explicit operator approval. This repository is public: do not store credentials, passwords, access keys, session tokens, JWTs, student data, teacher usernames, email addresses, personal identifiers, or local filesystem paths in it.
+> Every AWS mutation requires explicit operator approval. This repository is public: do not store credentials, passwords, access keys, session tokens, JWTs, student data, teacher usernames, email addresses, personal identifiers, or local filesystem paths in it.
 
 ## 1. Deployment approach
 
@@ -45,12 +45,12 @@ No `cdk bootstrap`, `cdk diff`, `cdk deploy`, or `cdk destroy` has been run for 
 | Remote | `https://github.com/akio-q/struct-lab-backend.git` |
 | Branch | `feat/manual-aws-deployment` |
 | Packaging commit | `7b7f9317ec7eec9ff0fb9f4cc58d97221086f87c` — `feat(deployment): add local Lambda packaging and verification` |
-| Working tree at checkpoint start | Clean |
+| Health hotfix and regression assertion | `66d7a4cb453bdacc68e93c0a81c88cb72dade2ae` |
 | Lambda deployment commit | None — P4-07.5 changed AWS resources only; no repository change |
-| Last full regression | 247/247 PASS, including 28 infrastructure tests (reported; not rerun for this documentation checkpoint) |
+| Last full regression | 247/247 PASS across 12 files, including 28 infrastructure tests, rerun for P4-07.6 |
 | Package manager | `pnpm@11.14.0` |
 | Required Node.js | `>=22` |
-| Local Node.js used for packaging | `v24.18.0` |
+| Local Node.js used for checkpoint packaging | `v24.13.1` |
 
 The checkpoint commit for this document is created separately and pushed to the existing remote feature branch without force.
 
@@ -103,7 +103,7 @@ Use this command for the existing profile; do not substitute a different login m
 | Item | Last verified state |
 | --- | --- |
 | AWS plan | `FREE` |
-| Plan status | `ACTIVE` (re-verified after P4-07.5) |
+| Plan status | `ACTIVE` (P4-07.6 read-only audit; no AWS calls during the Git checkpoint) |
 | Remaining credits | `$159.999971` (last reported; unchanged through P4-07.5) |
 | Plan expiration | `2027-05-12` |
 | Budget | `StructLab-Zero-Spend` |
@@ -132,8 +132,8 @@ Free Plan credits and allowances are finite. CloudWatch Logs, alarms, requests, 
 | P4-07.4d — IAM Execution Roles | Completed with documented limitations |
 | P4-07.4 — Checkpoint & Team Handoff | Completed |
 | P4-07.5 — Lambda Deployment | Completed — three functions deployed and smoke-tested |
-| P4-07.6 — API Gateway Configuration | **Next; not started** |
-| Backend API verification | Pending; requires API Gateway integration |
+| P4-07.6 — API Gateway Configuration | **COMPLETE** — configuration audit and HTTP smoke tests passed |
+| P4-07.7 — Backend End-to-End Verification | **NEXT** — not started |
 | Cognito JWT and real teacher authorization verification | Pending |
 | Valid student registration and DynamoDB persistence verification | Pending |
 | Teacher-authorized listing and pagination verification | Pending |
@@ -171,6 +171,7 @@ No DynamoDB data operation was performed during the IAM, documentation, or Lambd
 | --- | --- |
 | User Pool ID | `eu-north-1_5v0nXILuU` |
 | User Pool name | `User pool - nobwzm` |
+| Username attributes | Live `UsernameAttributes=[email]` differs from earlier sign-in documentation. Reconcile before P4-07.7 authentication and P4-07.8 frontend verification; Cognito was not changed. |
 | Feature plan | `ESSENTIALS` |
 | Deletion protection | `ACTIVE` |
 | Self-registration | Disabled (`AllowAdminCreateUserOnly=true`) |
@@ -312,7 +313,7 @@ Policy simulations were performed during P4-07.4d. P4-07.5 then invoked four smo
 | --- | --- | --- |
 | Lambda `structlab-test` | `nodejs22.x`, handler `index.handler`, last modified `2026-11-24T18:13:27Z` | Test function; not one of the deployed backend functions |
 | IAM role `structlab-test-execution-role` | ARN `arn:aws:iam::677339799150:role/structlab-test-execution-role`, created `2026-11-23T12:39:56+00:00` | Do not modify or reuse for the deployed functions |
-| API Gateway HTTP API `tstq9li2el` | Routes `GET /health` and `GET /admin/test` | Test API; do not modify before P4-07.6 approval |
+| HTTP API `tstq9li2el` | Now the active dev API (section 7.3); `GET /admin/test` retained | Preserve the API, original test integrations, authorizer, and test Lambda permissions |
 | DynamoDB table `Students` | ARN `arn:aws:dynamodb:eu-north-1:677339799150:table/Students`; `ACTIVE`; key `studentsId` (String); `5/5`; deletion protection enabled; 0 items | Legacy/test table; not the deployment target |
 | Cognito group `structlab-test-teachers` | Exactly 1 member; no IAM role | Preserve the group and membership |
 | Cognito confirmed test teacher | Single enabled, `CONFIRMED` user; username withheld | Do not reset, disable, or delete without approval |
@@ -321,7 +322,7 @@ Policy simulations were performed during P4-07.4d. P4-07.5 then invoked four smo
 
 No test resource was modified during the IAM, documentation, or Lambda deployment stages.
 
-## 7. Deployed Lambda functions and pending API Gateway
+## 7. Deployed Lambda functions and HTTP API
 
 ### 7.1 Lambda deployment — COMPLETE
 
@@ -329,7 +330,7 @@ No test resource was modified during the IAM, documentation, or Lambda deploymen
 
 All three functions were created during P4-07.5 with direct `aws lambda create-function` calls using `--zip-file fileb://...` from the local build output. No CloudFormation, CDK deployment, Docker, or S3 deployment bucket was used. Each function reached `Active`.
 
-| Function | ARN | Execution role | Uploaded package |
+| Function | ARN | Execution role | Original P4-07.5 package |
 | --- | --- | --- | --- |
 | `structlab-dev-health` | `arn:aws:lambda:eu-north-1:677339799150:function:structlab-dev-health` | `structlab-dev-health-exec` | `dist/lambda/health.zip` |
 | `structlab-dev-create-student` | `arn:aws:lambda:eu-north-1:677339799150:function:structlab-dev-create-student` | `structlab-dev-create-student-exec` | `dist/lambda/create-student.zip` |
@@ -346,7 +347,7 @@ Verified configuration for all three functions:
 - version `$LATEST` only; no published versions or aliases;
 - tracing `PassThrough`;
 - no layers, VPC configuration, reserved concurrency, or provisioned concurrency;
-- no Function URL, resource policy, or event source mapping.
+- no Function URL or event source mapping; each backend function now has one route-specific invoke permission (section 7.3).
 
 | Setting | `structlab-dev-health` | `structlab-dev-create-student` | `structlab-dev-list-students` |
 | --- | --- | --- | --- |
@@ -368,11 +369,11 @@ Uploaded artifacts and checksums:
 
 | Function | Size (bytes) | SHA-256 (hex) | AWS CodeSha256 (Base64) |
 | --- | --- | --- | --- |
-| `structlab-dev-health` | `512` | `797983BC401D53B04B466465EB8BEA51105C999E43BFA6814B5ECA32CC9BDAE9` | `eXmDvEAdU7BLRmRl64vqURBcmZ5Dv6aBS17KMsyb2uk=` |
+| `structlab-dev-health` | `530` | `7593C1823D86170B6E413DE31416AA18050B784C812919A2EC00149B6EC2E42F` | `dZPBgj2GFwtuQT3jFBaqGAULeEyBKRmi7AAUm27C5C8=` |
 | `structlab-dev-create-student` | `160079` | `D4F44CD67559FE50982F952800E378CC20E771C3D1BB1C7F1ACA751C95C7E62C` | `1PRM1nVZ/lCYL5UoAON4zCDnccPRuxx/Gsp1HJXH5iw=` |
 | `structlab-dev-list-students` | `160402` | `2C83459FBE271F7A2EF43D730C402A883F39B2AF390A091841A169B0076FE8DC` | `LINFn74nH3ou9D1zDEAqiD85sq85CgkYQaFpsAdv6Nw=` |
 
-Each archive contains exactly one root entry, `index.js`. AWS `CodeSha256` and `CodeSize` matched the locally recorded values for all three functions.
+Each archive contains exactly one root entry, `index.js`. The health row identifies the P4-07.6 release ZIP; the other two deployed hashes are unchanged from P4-07.5. The audit verified the deployed health size and hash against the preserved release ZIP.
 
 ### 7.2 Direct runtime smoke tests — PASSED
 
@@ -388,7 +389,7 @@ Four direct Lambda invocations were performed during P4-07.5 with sanitized API 
 Notes:
 
 - No `FunctionError` occurred in any invocation.
-- Node.js 22 runtime compatibility is **confirmed for these four tested paths only**.
+- These four direct paths were exercised on Node.js 22 during P4-07.5.
 - Test 4 passed synthetic authorizer claims directly to the handler, matching the repository unit-test pattern. No JWT was minted or validated, and no real teacher token was used.
 - All rejection paths return before any DynamoDB operation by code inspection.
 - No DynamoDB reads or writes were observed: the table showed zero consumed read and write capacity during the test window, and its item count remained `0`.
@@ -396,35 +397,51 @@ Notes:
 - All existing test resources listed in section 6 remained unchanged.
 - The AWS Free Plan remained `ACTIVE` with credits `$159.999971`.
 
-### 7.3 API Gateway — PENDING
+### 7.3 API Gateway — COMPLETE
 
-The existing test API `tstq9li2el` remains unchanged and currently has only:
+Reused HTTP API `tstq9li2el` at `https://tstq9li2el.execute-api.eu-north-1.amazonaws.com`. The `$default` stage has `AutoDeploy=true`; automatic deployment `4mpp9h` reached `DEPLOYED`. Default throttling is 10 requests/second, burst 20, with no route overrides. API-wide CORS permits only `http://localhost:3000`, methods `GET, POST`, headers `content-type, authorization`, credentials disabled, max age 300 seconds. Both settings also apply to the test route.
 
-- `GET /health`
-- `GET /admin/test`
+| Route | Route ID | Authorization | Integration ID | Lambda |
+| --- | --- | --- | --- | --- |
+| `GET /health` | `hf81nj3` | None | `l8x59n6` | `structlab-dev-health` |
+| `POST /students` | `2v7xkv0` | None | `176zggg` | `structlab-dev-create-student` |
+| `GET /admin/students` | `9fe7qf9` | JWT `5nmism` | `0p1bvlm` | `structlab-dev-list-students` |
+| `GET /admin/test` | `dkrm60b` | JWT `5nmism` | `v4mv4s5` (preserved) | `structlab-test` |
+| No current route (original health target) | — | — | `i1dl8gu` (preserved) | `structlab-test` |
 
-No backend route, JWT authorizer, CORS rule, throttling setting, stage change, or Lambda invoke permission has been configured.
+All five integrations are `AWS_PROXY`, integration method `POST`, payload `2.0`, timeout 30,000 ms. Reused JWT authorizer `5nmism` validates the Cognito pool issuer for `eu-north-1_5v0nXILuU`, audience `5abaa8u50uj7c4eii44goh2t2a`, via `$request.header.Authorization`.
 
-Planned backend routes:
+Each backend Lambda policy grants `Allow` for `lambda:InvokeFunction` to `apigateway.amazonaws.com` on that function alone, with `AWS:SourceAccount=677339799150` and the following literal `AWS:SourceArn`. The original test Lambda policies were preserved.
 
-| Method | Path | Authorization | Planned Lambda |
-| --- | --- | --- | --- |
-| `GET` | `/health` | None | `structlab-dev-health` |
-| `POST` | `/students` | None | `structlab-dev-create-student` |
-| `GET` | `/admin/students` | Cognito JWT authorizer + `teachers` group check in the Lambda | `structlab-dev-list-students` |
+| Function | Statement ID | Source ARN |
+| --- | --- | --- |
+| `structlab-dev-health` | `apigw-get-health` | `arn:aws:execute-api:eu-north-1:677339799150:tstq9li2el/$default/GET/health` |
+| `structlab-dev-create-student` | `apigw-post-students` | `arn:aws:execute-api:eu-north-1:677339799150:tstq9li2el/$default/POST/students` |
+| `structlab-dev-list-students` | `apigw-get-admin-students` | `arn:aws:execute-api:eu-north-1:677339799150:tstq9li2el/$default/GET/admin/students` |
 
-Planned API settings from the CDK reference:
+### 7.4 HTTP smoke evidence and health hotfix
 
-- JWT authorizer uses User Pool `eu-north-1_5v0nXILuU` and App Client `5abaa8u50uj7c4eii44goh2t2a`;
-- identity source: `$request.header.Authorization`;
-- CORS allowed origin: `http://localhost:3000` only;
-- CORS methods: `GET`, `POST`;
-- CORS headers: `content-type`, `authorization`;
-- credentials: disabled;
-- preflight max age: 300 seconds;
-- default-stage throttling: rate 10 requests/second, burst 20.
+Original S1 returned the correct `200` JSON body but omitted `Cache-Control`. The health handler built its own headers. A separately approved one-line fix added `cache-control: no-store` without changing status, content type, or body; only health code was redeployed. The existing health unit test now also asserts `no-store` (commit in section 2).
 
-API reuse/replacement decision: deferred to P4-07.6. Do not modify `tstq9li2el` before P4-07.6 approval. Lambda integration will require API Gateway invoke permissions on each function.
+After the hotfix, **11/11 HTTP scenarios passed in 12 requests**, all with curl exit 0. S1 passed separately and again in the full run.
+
+| Scenarios | Accepted result |
+| --- | --- |
+| S1–S2: health, then allowed origin | `200`, expected JSON; S1 confirmed `no-store`, S2 confirmed allow-origin |
+| S3–S4: both admin routes without credentials | `401 Unauthorized` |
+| S5–S7: unsupported content type, malformed JSON, empty object | `415`, `400`, `400`; rejected before persistence |
+| S8–S9: allowed preflights for registration and admin listing | `204` with configured CORS headers |
+| S10: invalid JWT | `401 Unauthorized` |
+| S11: disallowed-origin preflight | `204`, no allow-origin header |
+
+### 7.5 API rollback — separate approval required
+
+Retain the rollback snapshots. Before acting, verify the account, region, API, IDs, current targets and policy statements against section 7.3; stop on drift or failure.
+
+1. Delete only the new routes `2v7xkv0` and `9fe7qf9`. Restore route `hf81nj3` to `integrations/i1dl8gu`, authorization `NONE`.
+2. Remove only the three named backend permission statements above. Delete only the now-unreferenced integrations `l8x59n6`, `176zggg`, and `0p1bvlm`.
+3. Remove the added CORS configuration with `apigatewayv2 delete-cors-configuration`. Preserve both original integrations, `GET /admin/test`, the test Lambda permissions, API, stage and authorizer.
+4. Re-read routes, integrations, policies, CORS and stage settings against the pre-change snapshots. Confirm each backend function exists before accepting `ResourceNotFoundException` from `get-policy` as absence. Exact restoration of previously unset throttle fields was not confirmed: **retain 10/20**; do not assume omission resets them or recreate the stage. API rollback does not revert Lambda code.
 
 ## 8. Packaging commands and deployed archives
 
@@ -435,7 +452,7 @@ pnpm package:lambdas
 pnpm verify:lambdas
 ```
 
-Deployed archives:
+Local build outputs:
 
 ```text
 dist/lambda/health.zip
@@ -443,7 +460,7 @@ dist/lambda/create-student.zip
 dist/lambda/list-students.zip
 ```
 
-These exact archives were uploaded during P4-07.5; sizes and checksums are recorded in section 7.1.
+These are rebuilds, not deployment records. ZIP timestamps can change hashes. At this checkpoint `typecheck`, `lint`, `test`, `build`, `package:lambdas`, `verify:lambdas` and `git diff --check` passed. The verifier checked all three ZIPs and handler exports, its network guard, and four offline smoke tests. No rebuild was uploaded. The original health release ZIP was retained outside the repository and its SHA-256 matched section 7.1 before and after packaging.
 
 Each archive contains exactly one non-empty root entry, `index.js`. The packaging scripts refuse unexpected output paths and verify the archive shape.
 
@@ -453,19 +470,15 @@ If a local Node.js 22 binary is available, the stricter verification can be run 
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-lambda-packages.ps1 -RequireNode22
 ```
 
-Known packaging limitation: the local machine used for packaging has Node.js `v24.18.0`, and no local Node.js 22 binary was found. The bundles target `node22`. Deployed `nodejs22.x` execution succeeded for the four paths in section 7.2; all other runtime paths remain untested.
+Known packaging limitation: the checkpoint verifier used Node.js `v24.13.1`; no local Node.js 22 binary was found. Bundles target `node22`. For deployed runtime evidence see sections 7.2 and 7.4.
 
 ## 9. Remaining verification
 
 ### Backend
 
 - Lambda functions are deployed and attached to the matching execution roles (section 7.1).
-- After P4-07.6 API Gateway integration, verify through the API:
-  - `GET /health` returns `200` with `status: ok` and service `struct-lab-backend`.
-  - `POST /students` returns `201` for valid JSON, `415` for an unsupported content type, `413` for an oversized body, and `400` for invalid input.
-  - `GET /admin/students` returns `401` without a token, `403` for a valid non-teacher token, and `200` with pagination for a teacher access token.
-  - CORS preflight works for the allowed origin and no allow-origin header is returned for other origins.
-  - Throttling behaves as configured under controlled dev-only load if separately approved.
+- Still unverified through the API: valid registration (`201`), DynamoDB persistence, oversized-body rejection (`413`), real Cognito authentication, teacher-authorized listing, ID-token rejection, valid non-teacher access-token rejection, and pagination.
+- Runtime throttling behavior has not been load-tested; a controlled dev-only test requires separate approval.
 - Do not use ID tokens for `/admin/students`; the handler requires an access token with the exact `teachers` group.
 
 ### Frontend
@@ -487,18 +500,15 @@ No password-based SRP login was performed. No password, JWT, or fresh access-tok
 | One unverified IAM user (name withheld) | Reported as unverified; ownership and use are unknown | Verify ownership and dependencies before any action |
 | Lambda `structlab-test` | Test function | Remove only after the deployed backend functions replace its purpose |
 | IAM role `structlab-test-execution-role` | Test execution role | Remove only after no function uses it |
-| API Gateway `tstq9li2el` | Test API with `GET /health` and `GET /admin/test` | Remove only after the API integration is accepted in P4-07.6 |
 | DynamoDB table `Students` | Legacy/test table with 0 items | Export/backup and explicit approval; deletion protection must be disabled separately |
 | Cognito group `structlab-test-teachers` | Temporary group | Remove only after `teachers` membership is confirmed and no dependency remains |
 | CloudWatch log group `/aws/lambda/structlab-test` | Test Lambda log group | Retain until its logs are no longer needed |
 
 ### Known limitations and unresolved decisions
 
-- The three Lambda functions are deployed, but no API Gateway route, authorizer, CORS rule, throttling setting, or invoke permission is configured.
-- No end-to-end API, CORS, throttling, or teacher-authorization verification has been performed.
+- Public registration can be abused by non-browser clients. CORS is not authorization, and best-effort throttling is not a spending cap. Use **synthetic data only** in dev; any valid registration or data operation requires separate approval.
 - The IAM roles deliberately have no CloudWatch Logs permissions; function logs are unavailable until a later approved logging change.
 - No CloudWatch log groups or alarms exist for the deployed functions.
-- Node.js 22 compatibility is confirmed only for the four smoke-test paths in section 7.2. Valid registration, teacher-authorized listing, and pagination remain untested.
 - Valid student registration and DynamoDB persistence are unverified.
 - Teacher-authorized listing and pagination are unverified.
 - Actual SRP login and fresh Cognito access-token claims are unverified; only synthetic non-teacher claims were exercised.
@@ -508,28 +518,8 @@ No password-based SRP login was performed. No password, JWT, or fresh access-tok
 - The manual IAM roles use `ManagedBy=Manual`; CDK-tagged resources would use `ManagedBy=AWS CDK`.
 - The `StructLab-Zero-Spend` budget is healthy, but whether credits are included in its calculation is unverified.
 - Account-specific DynamoDB Free Tier usage remains unverified.
-- The API reuse/replacement decision is deferred to P4-07.6.
-- The backend is not production-ready. Lambda deployment is complete, but the API is not exposed and must not be treated as end-to-end deployed.
+- The dev API is exposed; the smoke tests do not establish production readiness or end-to-end coverage.
 
 ## 11. Exact next action
 
-**P4-07.6 — API Gateway Configuration.**
-
-1. Re-run repository and AWS preflight checks:
-
-   ```powershell
-   git rev-parse --abbrev-ref HEAD
-   git rev-parse HEAD
-   git status --short
-   aws sts get-caller-identity --profile structlab-dev --region eu-north-1
-   aws freetier get-account-plan-state --profile structlab-dev --region eu-north-1
-   aws lambda get-function --function-name structlab-dev-health --profile structlab-dev --region eu-north-1
-   ```
-
-2. Decide whether to reuse `tstq9li2el` or create a separate HTTP API. This decision is intentionally deferred to P4-07.6.
-3. Review the planned routes, JWT authorizer, CORS, throttling, and required Lambda invoke permissions in section 7.3.
-4. Request explicit operator approval before any API Gateway mutation.
-5. Configure API Gateway and verify route integration, authorizer behavior, CORS, and throttling as separately approved.
-6. Do not modify or delete the existing test routes without cleanup approval.
-
-Do not use real student data, real teacher tokens, or DynamoDB data operations during P4-07.6 without explicit approval.
+**P4-07.7 — Backend End-to-End Verification: NEXT, not started.** Obtain separate approval for the verification scope in section 9 before exercising login, authorized routes, or persistence. Preserve the release ZIP and rollback snapshots.
