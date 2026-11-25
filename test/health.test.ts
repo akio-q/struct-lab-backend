@@ -9,6 +9,7 @@ describe('GET /health handler', () => {
     expect(response.statusCode).toBe(200);
     expect(response.headers).toMatchObject({
       'content-type': 'application/json',
+      'cache-control': 'no-store',
     });
     expect(JSON.parse(response.body ?? 'null')).toEqual({
       status: 'ok',
