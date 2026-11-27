@@ -1,34 +1,35 @@
 # Frontend Integration Contract
 
-**Статус:** P4-01 і P4-02 (P4-02.1 request hardening, P4-02.2 CORS, P4-02.3
-throttling і P4-02.4 concurrency awareness) реалізовано й перевірено локально;
-P4-02.5 security review — PASS. P4-03.4 Cognito Token Security і P4-03.5
-Cognito Account Security реалізовано, перевірено й запушено в
-`origin/feat/cognito-account-security`; P4-03.6 security audit — PASS. AWS-деплой
-ще не виконувався, тому реальної базової URL-адреси поки немає. Після деплою її
-треба взяти зі stack output `HttpApiUrl`. Поведінка frontend authentication,
-token-refresh, password history і account recovery окремо не перевірялася.
+**P4-07.7.5b.** Бекенд розгорнуто вручну; інтеграція фронтенду — **PENDING**.
+На розгорнутому бекенді E2E-01–E2E-09 дали **9/9 PASS**, зокрема перевірено
+8/8 некоректних запитів до списку та 10/10 некоректних реєстрацій (разом
+18/18). E2E-10 — **DEFERRED BY OPERATOR**. Це результати попередніх перевірок,
+не перевірка з браузера StructLab.
 
-Цей документ описує лише те, що реально реалізовано в коді. Він не додає
-endpoint-ів, полів або поведінки, яких немає в backend.
+**Deployed API base URL:**
+`https://tstq9li2el.execute-api.eu-north-1.amazonaws.com` (HTTP API
+`tstq9li2el`, stage `$default`).
+
+Додавайте шлях маршруту безпосередньо до базового URL, без `/$default` чи
+`/dev`. [Runbook](manual-deployment.md) містить історію розгортання,
+[результати E2E](manual-deployment.md#91-scenario-results) та
+[синтетичні записи для перевірки списку](manual-deployment.md#103-retained-synthetic-students).
 
 ## 1. Загальні правила
 
 - JSON-відповіді, сформовані Lambda через спільний `jsonResponse`, мають
   `content-type: application/json` і `cache-control: no-store`. Це не
   поширюється на помилки, які генерує API Gateway без участі Lambda.
-- Базовий URL: значення output `HttpApiUrl`, наприклад
-  `https://<api-id>.execute-api.<region>.amazonaws.com`.
 - Шляхи вказуються без завершального слеша: `/students`, `/admin/students`.
-- Для запитів із тілом надсилайте `Content-Type: application/json`.
-  `POST /students` приймає щонайбільше 4096 decoded bytes; інакше — `413` або
-  `415`.
+- Для `POST /students` надсилайте `Content-Type: application/json` (інакше
+  `415`). Тіло понад 4096 декодованих байтів відхиляється з `413`.
 - Cross-origin запити дозволені лише з `http://localhost:3000` (локальний
   Next.js). Preflight обробляє API Gateway; див. розділ 7.
-- API Gateway обмежує `$default` stage до 10 req/s і burst 20. Перевищення
-  повертає `429 Too Many Requests`; див. розділ 8.
+- На `$default` налаштовано rate 10 запитів/с і burst 20. При перевищенні
+  очікується `429 Too Many Requests`; поведінку під навантаженням не тестували
+  (розділ 8).
 - Для admin-запитів передавайте access token у
-  `Authorization: Bearer <accessToken>`. Cross-origin cookies не
+  `Authorization: Bearer <access-token>`. Cross-origin cookies не
   використовуються.
 - Прикладні помилки мають форму:
 
@@ -49,7 +50,7 @@ endpoint-ів, полів або поведінки, яких немає в back
 | --- | --- | --- | --- |
 | `GET` | `/health` | Немає | `200` |
 | `POST` | `/students` | Немає | `201` |
-| `GET` | `/admin/students` | `Authorization: Bearer <accessToken>` + група `teachers` | `200` |
+| `GET` | `/admin/students` | `Authorization: Bearer <access-token>` + група `teachers` | `200` |
 
 ## 2. Автентифікація викладача
 
@@ -57,48 +58,50 @@ endpoint-ів, полів або поведінки, яких немає в back
 
 | Параметр | Значення |
 | --- | --- |
-| User Pool ID | output `UserPoolId` |
-| App Client ID | output `UserPoolClientId` |
+| AWS region | `eu-north-1` |
+| User Pool ID | `eu-north-1_5v0nXILuU` |
+| App Client ID | `5abaa8u50uj7c4eii44goh2t2a` |
+| App Client name | `structlab-dev-client` |
 | App Client secret | відсутній (публічний клієнт) |
+| Sign-in identifier | **email** (`UsernameAttributes=[email]`) |
 | Self-sign-up | вимкнено |
 | Створення акаунтів | лише адміністратором User Pool |
-| Password policy | мінімум 12 символів; lowercase, uppercase, digits, symbols |
-| Password history | 5 |
-| Temporary password validity | 3 дні |
-| Account recovery | лише адміністратор (`AccountRecovery.NONE`) |
+| MFA | inactive (`OFF`) |
+| Password policy | live minimum 8 characters; full complexity policy not re-audited in P4-07.7.5b |
+| Password history | not configured (live); CDK reference — 5 |
+| Temporary password validity | 7 days (live); CDK reference — 3 days |
+| Account recovery | verified email + verified phone (live); CDK reference — admin-only |
 | User-existence errors | приховані (`PreventUserExistenceErrors: ENABLED`) |
-| Auth flow | SRP (`ALLOW_USER_SRP_AUTH`) + refresh token (`ALLOW_REFRESH_TOKEN_AUTH`) |
-| OAuth / Hosted UI | вимкнено |
+| Auth flows | SRP (`ALLOW_USER_SRP_AUTH`), refresh (`ALLOW_REFRESH_TOKEN_AUTH`), `ALLOW_USER_AUTH` |
+| OAuth / Managed Login | code flow enabled; domain `eu-north-15v0nxiluu`; callback `https://d84l1y8p4kdic.cloudfront.net` |
 | Access token | 15 хвилин |
+| ID token | 60 хвилин |
 | Refresh token | 7 днів |
 | Refresh-token rotation | вимкнено |
 | Token revocation | увімкнено для App Client |
-| Група доступу | `teachers` |
-| Username | фактичний username акаунта; email не є alias автоматично |
+| Група доступу | exact case-sensitive `teachers` |
 
-`Username` для SRP має точно збігатися з username, який адміністратор задав під
-час створення акаунта. У поточній конфігурації User Pool не має
-`UsernameAttributes` або `AliasAttributes`, тому email не стає alias
-автоматично: якщо акаунт створено з username `teacher1`, вхід з email не
-працюватиме.
+Для SRP у полі `Username` передавайте **email викладача**, а не внутрішнє
+ім’я користувача Cognito чи `sub`. Адміністратор керує акаунтами й членством
+у групі `teachers`.
 
-Оскільки Hosted UI і OAuth вимкнені:
-
-- не можна використовувати redirect на Cognito Hosted UI;
-- немає `/oauth2/authorize`, `/login` або callback URL;
-- логін виконується безпосередньо з фронтенду через Cognito SDK з підтримкою
-  SRP.
+SRP уже дозволено для цього клієнта. Також увімкнено OAuth code flow, але
+зареєстрований callback веде на наявну стандартну сторінку перенаправлення
+Cognito Managed Login. Скриншот успішного входу підтверджує автентифікацію
+в Cognito, а не вхід із застосунку StructLab. Якщо команда обере redirect-based
+вхід, їй потрібні обробка callback у фронтенді та окремо погоджений точний
+callback URL цього застосунку.
 
 ### 2.2. Потік логіну
 
 ```text
-1. Адміністратор створює викладача в Cognito User Pool.
-2. Адміністратор додає викладача до групи teachers.
-3. Фронтенд виконує SRP-логін із UserPoolId і UserPoolClientId.
+1. Передумова: адміністратор додав акаунт викладача до групи teachers.
+2. Викладач вводить email для входу.
+3. Фронтенд автентифікує викладача через SRP або погоджений OAuth code flow.
 4. Cognito повертає access token, ID token і refresh token.
 5. Фронтенд бере саме access token.
 6. Для admin-запитів додає заголовок:
-   Authorization: Bearer <accessToken>
+   Authorization: Bearer <access-token>
 ```
 
 ID token **не підходить** для адміністративного API. Backend перевіряє
@@ -107,8 +110,9 @@ ID token **не підходить** для адміністративного A
 
 ### 2.3. Приклад SRP-логіну
 
-Нижче — ілюстративний приклад із `amazon-cognito-identity-js`. Це вибір
-фронтенд-проєкту; backend не додає цю залежність.
+Нижче — приклад раніше задокументованого SRP-потоку з
+`amazon-cognito-identity-js`. Він показує, куди передавати email та звідки
+брати access token; це приклад API бібліотеки, а не перелік залежностей StructLab.
 
 ```ts
 import {
@@ -117,19 +121,22 @@ import {
   CognitoUserPool,
 } from 'amazon-cognito-identity-js';
 
+// memoryStorage — сховище лише в пам’яті, яке має надати фронтенд.
 const userPool = new CognitoUserPool({
-  UserPoolId: USER_POOL_ID,
-  ClientId: USER_POOL_CLIENT_ID,
+  UserPoolId: 'eu-north-1_5v0nXILuU',
+  ClientId: '5abaa8u50uj7c4eii44goh2t2a',
+  Storage: memoryStorage,
 });
 
 const cognitoUser = new CognitoUser({
-  // username — фактичний username акаунта в Cognito, не обов'язково email.
-  Username: username,
+  // email — фактичний sign-in identifier у live User Pool.
+  Username: email,
   Pool: userPool,
+  Storage: memoryStorage,
 });
 
 cognitoUser.authenticateUser(
-  new AuthenticationDetails({ Username: username, Password: password }),
+  new AuthenticationDetails({ Username: email, Password: password }),
   {
     onSuccess: (session) => {
       const accessToken = session.getAccessToken().getJwtToken();
@@ -146,31 +153,26 @@ cognitoUser.authenticateUser(
 );
 ```
 
-Якщо використовується AWS Amplify, еквівалентом є `signIn` із наступним
-`fetchAuthSession()`; для запитів усе одно потрібен **access token**, а не ID
-token.
-
 ### 2.4. Термін дії та відновлення сесії
 
 - Access token діє 15 хвилин.
 - Refresh token діє 7 днів; refresh-token rotation вимкнено.
 - Backend не має власного endpoint-а refresh або logout.
-- Оновлення токена виконує Cognito SDK на фронтенді.
-- Після `401` слід спробувати оновити сесію, а якщо це неможливо — повернути
-  викладача на екран входу.
+- Оновлення сесії слід реалізувати на боці клієнта через Cognito. Після `401`
+  можна один раз оновити сесію та повторити `GET` з новим **access token**.
+  Якщо сесію не відновлено або запит знову повернув `401`, потрібен новий вхід.
 - Після завершення refresh token користувачу може знадобитися повторний вхід.
 - Після зміни групи в Cognito вже виданий access token може містити старі групи
   до завершення терміну дії. Потрібен новий токен.
 - Вихід із фронтенду не відкликає вже виданий access token. Не зберігайте токени
   довше, ніж потрібно, і не логуйте їх.
-- Ці token settings реалізовані локально, але не задеплоєні в AWS. Frontend
-  authentication і token-refresh behavior окремо не перевірялися; існуючу
-  інтеграцію треба перевірити до deployment.
+- Ці строки дії взято з конфігурації App Client. Вхід та оновлення сесії
+  саме з фронтенду StructLab ще не перевіряли.
 
 ### 2.5. Заголовок авторизації
 
 ```http
-Authorization: Bearer <accessToken>
+Authorization: Bearer <access-token>
 ```
 
 - Назва схеми: `Bearer`.
@@ -178,28 +180,19 @@ Authorization: Bearer <accessToken>
 - Cookie-авторизація не використовується.
 - Токен має бути виданий для налаштованого User Pool і App Client.
 
-### 2.6. Паролі, recovery та user enumeration (P4-03.5)
+### 2.6. Паролі, recovery та user enumeration
 
-- Password history — **5**. Коли Cognito застосовує policy, останні п'ять
-  паролів не можна повторно використати. Наявні паролі не скидаються
-  автоматично.
-- Temporary password validity — **3 дні**. Якщо тимчасовий пароль прострочений,
-  потрібне втручання адміністратора.
-- Account recovery — **лише адміністратор** (`AccountRecovery.NONE`).
-  Self-service «Forgot password» у Cognito вимкнений. Не пропонуйте
-  self-service recovery у фронтенді; скеровуйте викладача до авторизованого
-  адміністратора.
+- Для входу використовуйте параметри User Pool з розділу 2.1. Cognito
+  налаштовано на відновлення через підтверджений email або номер телефону.
+  У бекенді StructLab немає окремого API відновлення.
 - `PreventUserExistenceErrors: ENABLED` означає, що помилки входу мають
   оброблятися узагальнено. Не показуйте різні повідомлення залежно від того, чи
   існує акаунт, і не робіть висновків про наявність користувача з тексту помилки.
   Це зменшує information disclosure, але не є гарантією проти всіх методів
   enumeration.
-- Існуюча frontend-обробка помилок може потребувати перевірки. Реальні Cognito
-  login, password change, password reset, temporary-password expiry і recovery
-  flow не тестувалися.
-- Ці налаштування реалізовані локально, але не задеплоєні в AWS. Адміністратор
-  потребує відповідних permissions і окремо затвердженої процедури recovery;
-  administrative recovery API або frontend recovery UI не реалізовані.
+- E2E-03 verified real Cognito authentication. Password change, password reset,
+  temporary-password expiry, account recovery, and user-enumeration behavior
+  were not tested.
 
 ## 3. `GET /health`
 
@@ -276,7 +269,8 @@ interface CreateStudentRequest {
 8. `studentId` і `createdAt` клієнт задати не може: сервер генерує їх сам.
 
 Frontend може дублювати ці правила для зручності користувача, але саме серверна
-валідація є джерелом істини.
+валідація є джерелом істини. Для `fullName` та `group` сервер вимірює
+`value.trim().length` (одиниці UTF-16), а для всього тіла запиту — байти.
 
 ### 4.3. Успішна відповідь
 
@@ -379,6 +373,18 @@ retry `POST /students` після `500`, `429`, таймауту або мере
 повторний запит може створити дублікат. Повторюйте лише після підтвердження
 користувача.
 
+### 4.7. Live verification
+
+- E2E-01 student registration: **PASS** (`201`).
+- E2E-02 DynamoDB persistence: **PASS**.
+- Registration validation: **10/10 PASS** — eight `400`, one `415`, one `413`,
+  with exact error bodies.
+- POST attempts: **10**; unexpected results: **0**; ambiguous results: **0**;
+  successful registration responses in the validation stage: **0**.
+- No valid registration request was sent during the validation stage.
+- Registration is **not idempotent**; an ambiguous request must not be retried
+  blindly.
+
 ## 5. `GET /admin/students`
 
 Захищений перегляд студентів. Потрібен Cognito access token викладача.
@@ -387,7 +393,7 @@ retry `POST /students` після `500`, `429`, таймауту або мере
 
 ```http
 GET /admin/students?limit=20
-Authorization: Bearer <accessToken>
+Authorization: Bearer <access-token>
 ```
 
 Query-параметри:
@@ -434,9 +440,13 @@ interface ListStudentsResponse {
 
 Правила:
 
-- `items` містить рівно поля `studentId`, `fullName`, `group`, `createdAt`;
+- кожен елемент `items` має рівно чотири поля: `studentId`, `fullName`, `group`, `createdAt`;
 - `nextCursor === null` означає, що сторінок більше немає;
-- `nextCursor` — рядок означає, що є наступна сторінка;
+- якщо `nextCursor` — рядок, його треба передати в наступний запит. Це не
+  гарантує наявності ще одного запису;
+- сторінка може містити `items: []` навіть тоді, коли `nextCursor` не `null`;
+  термінальна сторінка також може бути порожньою. Порожній `items` — не помилка,
+  якщо запит повернув `200`;
 - cursor непрозорий: не розбирайте його, не змінюйте і не конструюйте вручну;
 - порядок елементів нестабільний, бо backend використовує DynamoDB `Scan`.
   Не покладайтеся на сортування між сторінками.
@@ -451,6 +461,8 @@ encoding, як описано в розділі 4.3.
 `null`.
 
 ```ts
+const apiBaseUrl = 'https://tstq9li2el.execute-api.eu-north-1.amazonaws.com';
+
 const fetchAllStudents = async (accessToken: string): Promise<Student[]> => {
   const students: Student[] = [];
   let cursor: string | null = null;
@@ -462,7 +474,7 @@ const fetchAllStudents = async (accessToken: string): Promise<Student[]> => {
     }
 
     const response = await fetch(
-      `${API_BASE_URL}/admin/students?${params.toString()}`,
+      `${apiBaseUrl}/admin/students?${params.toString()}`,
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -531,8 +543,9 @@ const fetchAllStudents = async (accessToken: string): Promise<Student[]> => {
 
 ### 5.6. `403 Forbidden`
 
-Access token валідний, але не містить точної групи `teachers`. Це відповідь
-Lambda teacher guard, а не API Gateway authorizer.
+За контрактом Lambda teacher guard повертає `403`, якщо access token не
+містить точної групи `teachers`. E2E-06 спостерігав відповідь, сумісну з цим
+контрактом; за самою HTTP-відповіддю неможливо незалежно встановити її джерело.
 
 ```json
 {
@@ -547,8 +560,9 @@ Lambda teacher guard, а не API Gateway authorizer.
 - `teachers-extra`, `xteachers`, `admins,teachers`;
 - лише інші групи.
 
-Повторний запит із тим самим токеном не допоможе. Потрібно перевірити членство в
-групі `teachers` і отримати новий токен.
+Покажіть «Доступ заборонено». Не запускайте цикл оновлення сесії: повторний
+запит із тим самим токеном не допоможе. Якщо адміністратор змінив членство у
+групі, потрібен новий access token.
 
 ### 5.7. `500 Internal Server Error`
 
@@ -563,7 +577,29 @@ gateway-generated `500` від Lambda throttling. Деталі не розкри
 `GET` запит можна повторити з backoff, якщо це доречно; для `POST /students`
 врахуйте ризик дубліката.
 
+### 5.8. Live verification
+
+- E2E-07 student listing: **PASS** (`200`).
+- E2E-08 pagination: **PASS**.
+- Authorization outcomes: no token → **401**; teacher access token → **200**;
+  teacher ID token → **401**; valid non-teacher access token → **403**.
+- No stable ordering is promised; an empty terminal page is valid.
+
 ## 6. Обробка помилок на фронтенді
+
+### 6.1. Loading, empty and error states
+
+- **Завантаження:** покажіть очікування відповіді; поки `POST` виконується,
+  заблокуйте повторне надсилання форми. Під час завантаження наступної
+  сторінки залишайте вже отримані рядки на екрані.
+- **Порожній список:** показуйте його, лише якщо `nextCursor` став `null` і
+  за весь обхід записів не було. Порожня остання сторінка завершує обхід, але
+  не очищає таблицю.
+- **Помилка:** спочатку перевірте HTTP-статус; читайте JSON з полем `error`,
+  якщо воно є. Не показуйте сирий текст відповіді шлюзу.
+- **Невідомий результат реєстрації:** повідомте користувача, що результат не
+  підтверджено. Не повторюйте `POST` автоматично; за потреби наявність запису
+  може перевірити авторизований викладач.
 
 | Статус | Що робити |
 | --- | --- |
@@ -574,7 +610,7 @@ gateway-generated `500` від Lambda throttling. Деталі не розкри
 | `404` | Перевірити шлях; для визначених маршрутів не очікується |
 | `413` | Тіло завелике; зменшити payload; не повторювати автоматично |
 | `415` | Виправити `Content-Type` на `application/json`; не повторювати автоматично |
-| `429` | Зачекати й повторити з backoff; для `POST /students` врахувати ризик дубліката |
+| `429` | Для `GET` — обмежений retry з backoff. `POST /students` автоматично не повторювати |
 | `5xx` | Можлива тимчасова помилка, зокрема Lambda throttling; показати загальне повідомлення; для `GET` — backoff |
 | Мережева помилка | Для `GET` можливий retry; для `POST` є ризик дубліката |
 
@@ -582,11 +618,10 @@ gateway-generated `500` від Lambda throttling. Деталі не розкри
 Для `POST /students` не робіть автоматичний retry після таймауту, `429` або
 `500` без окремого рішення щодо ідемпотентності.
 
-Cognito authentication errors (sign-in, password change, password history,
-recovery) обробляйте узагальнено: не розкривайте, чи існує акаунт, і не
-пропонуйте self-service password recovery, оскільки `AccountRecovery.NONE`
-вимикає його. Для відновлення доступу скеровуйте викладача до авторизованого
-адміністратора.
+Cognito authentication errors (sign-in, password change, temporary-password
+expiry, recovery) обробляйте узагальнено: не розкривайте, чи існує акаунт, і не
+робіть висновків про наявність користувача з тексту помилки. Не припускайте
+admin-only recovery: це налаштування CDK, а не робочого User Pool (розділ 2.1).
 
 ## 7. CORS
 
@@ -603,7 +638,7 @@ CORS налаштований нативно на API Gateway HTTP API. Окре
 | `MaxAge` | `300` секунд |
 | Wildcards | заборонені |
 
-`Authorization: Bearer <accessToken>` передається явно в заголовку. Cross-origin
+`Authorization: Bearer <access-token>` передається явно в заголовку. Cross-origin
 cookies не використовуються і не підтримуються, бо `AllowCredentials: false`.
 Origin перевіряється точно: схема, host і port мають збігатися.
 
@@ -616,21 +651,21 @@ Origin перевіряється точно: схема, host і port мают�
 `Authorization` викликають браузерний preflight. Браузер робить його
 автоматично; не надсилайте `OPTIONS` вручну і не додавайте CORS-заголовки в
 Next.js. Успішний preflight — це 2xx із потрібними `access-control-*`
-заголовками; фактичний статус (зазвичай `204`) фіксуйте під час post-deploy
-перевірки.
+заголовками. Initial live smoke tests observed `204` for the allowed preflight;
+recheck the actual browser behavior before a frontend release.
 
-Якщо port 3000 зайнятий і Next.js обрав інший port, цей origin не буде
-дозволений. Звільніть port або додайте точний новий origin у
-`DEV_ENVIRONMENT.corsAllowedOrigins` (`lib/environments.ts`) і виконайте
-локальні перевірки та новий деплой. Wildcard використовувати не можна.
+Якщо порт 3000 зайнятий і Next.js обрав інший, це вже інший origin. Для роботи
+з наявною конфігурацією звільніть порт 3000 і відкрийте саме
+`http://localhost:3000`, а не `http://127.0.0.1:3000`.
 
-### 7.2. Майбутній задеплоєний фронтенд
+### 7.2. Інший origin фронтенду
 
-Коли з'явиться HTTPS-домен фронтенду, додайте його точний origin, наприклад
-`https://struct-lab.example.com`, у `DEV_ENVIRONMENT.corsAllowedOrigins`.
-Валідатор дозволяє HTTPS для будь-якого host, але відхиляє trailing slash, шлях,
-query string, fragment, credentials, дублікати і wildcards. Зміна потребує
-нового синтезу й деплою; до цього вона не діє.
+Перед запуском фронтенду з іншого origin перевірте фактичний CORS HTTP API
+`tstq9li2el`. Якщо нового origin немає, потрібна окремо схвалена зміна allowlist
+цього API: точний HTTPS-origin без шляху, trailing slash чи wildcard.
+`DEV_ENVIRONMENT.corsAllowedOrigins` у `lib/environments.ts` описує CDK;
+редагування файлу або `cdk synth` не змінює вручну налаштований API.
+Callback URL Cognito і CORS allowlist API Gateway — різні налаштування.
 
 ### 7.3. Межі CORS
 
@@ -641,8 +676,8 @@ query string, fragment, credentials, дублікати і wildcards. Зміна
 - CORS виконується браузером. Серверні клієнти та curl його ігнорують.
 - Відповіді `401`, `403`, `429` і gateway-generated `500` від Lambda throttling
   можуть не містити CORS-заголовків, якщо їх генерує API Gateway, а не
-  інтеграція. Це треба перевірити після деплою; локальні тести та синтез цього
-  не підтверджують.
+  інтеграція. Це не було незалежно перевірено для gateway-generated відповідей;
+  перевірте перед frontend release.
 
 ## 8. Throttling
 
@@ -654,7 +689,7 @@ API Gateway застосовує throttling до існуючого default stag
 | Rate limit | 10 requests per second |
 | Burst limit | 20 |
 | Stage | `$default` |
-| Перевищення | `429 Too Many Requests` |
+| Перевищення | `429 Too Many Requests` — expected; not load-tested live |
 
 Throttling — best-effort обмеження на рівні stage, а не per-IP або per-user
 quota. Усі клієнти поділяють один ліміт; один клієнт може вичерпати burst для
@@ -666,7 +701,7 @@ Lambda-викликів.
 
 Станом на P4-02.4 dev-акаунт має 10 unreserved concurrent executions, які
 поділяють усі три Lambda-функції. Це account-specific snapshot, а не постійний
-ліміт AWS Free Plan; перед деплоєм квоту треба перевірити знову. Reserved і
+ліміт AWS Free Plan; квоту не перевіряли повторно в P4-07.7.5b. Reserved і
 provisioned concurrency не налаштовані.
 
 Сплеск публічних `POST /students` може вичерпати спільний pool, і тоді
@@ -689,16 +724,17 @@ CORS-заголовків.
   використовуйте backoff, для `POST /students` не повторюйте автоматично.
 - `GET`-запити зазвичай можна повторити з backoff.
 
-Post-deploy перевірка: під контрольованим навантаженням зафіксувати фактичні
-статуси, заголовки й браузерно-видиму поведінку для `429` і для
-gateway-generated `500` від Lambda throttling. Не припускайте, що ці відповіді
-містять CORS-заголовки: API Gateway може згенерувати їх без CORS. Локальні тести
-перевіряють лише синтезовану конфігурацію.
+Контрольована перевірка `429` і gateway-generated `500` від Lambda throttling
+ще не виконувалася; вона потребує окремого схвалення. Не припускайте, що ці
+відповіді містять CORS-заголовки: API Gateway може згенерувати їх без CORS.
 
 ## 9. Що фронтенд не повинен робити
 
 - Не створювати Cognito-акаунти для студентів.
 - Не використовувати ID token для `/admin/students`.
+- Не використовувати username-only login: live sign-in identifier — **email**.
+- Не вважати Cognito Managed Login's default redirect page сторінкою StructLab
+  frontend; frontend integration залишається pending.
 - Не передавати access token у query string або логах.
 - Не надсилати JSON із `Content-Type: text/plain`; для `POST /students`
   обов'язковий `application/json`.
@@ -723,22 +759,35 @@ gateway-generated `500` від Lambda throttling. Не припускайте, �
 
 ## 10. Чекліст інтеграції
 
-1. Задеплоїти stack (окрема фаза; у P4-01/P4-02 деплою не було).
-2. Взяти `HttpApiUrl`, `UserPoolId` і `UserPoolClientId` зі stack outputs.
-3. Налаштувати Cognito SDK із цими `UserPoolId` та `UserPoolClientId`.
-4. Створити викладача через адміністратора Cognito і додати до групи `teachers`.
-5. Реалізувати SRP-логін і зберігати access token у пам'яті.
-6. Перевірити `GET /health`.
-7. Реалізувати публічну форму з валідацією `fullName` і `group`, заголовком
+1. Manual AWS deployment уже виконано; використовуйте base URL
+   `https://tstq9li2el.execute-api.eu-north-1.amazonaws.com`. Не шукайте
+   `HttpApiUrl` у stack outputs, бо CloudFormation stack не створювався.
+2. Використовуйте documented `UserPoolId` `eu-north-1_5v0nXILuU` і
+   `UserPoolClientId` `5abaa8u50uj7c4eii44goh2t2a`; якщо operator змінив
+   ресурси, перевірте актуальні значення перед інтеграцією.
+3. Налаштуйте Cognito SDK для **email-based sign-in**.
+4. Для перевірки списку використовуйте вже підготовлений акаунт викладача з
+   групи `teachers`. Два збережені синтетичні записи дають змогу перевірити
+   пагінацію з `limit=1` без нової реєстрації.
+5. Реалізуйте SRP-логін або окремо погоджений OAuth code flow; зберігайте
+   access token у пам'яті, а не в довгоживущому сховищі.
+6. Перевірте `GET /health`.
+7. Реалізуйте публічну форму з валідацією `fullName` і `group`, заголовком
    `Content-Type: application/json` і тілом до 4096 байт.
-8. Реалізувати admin-таблицю з пагінацією через `nextCursor`.
-9. Обробити `400`, `401`, `403`, `413`, `415`, `429`, `500` і мережеві помилки.
-10. Реалізувати backoff для `429`/тимчасових `5xx` і не робити автоматичний
+8. Реалізуйте admin-таблицю з пагінацією через `nextCursor`; не покладайтеся на
+   сортування і коректно обробляйте порожню термінальну сторінку.
+9. Обробіть `400`, `401`, `403`, `413`, `415`, `429`, `500` і мережеві помилки.
+10. Реалізуйте backoff для `429`/тимчасових `5xx` і не робіть автоматичний
     retry `POST /students`.
-11. Перевірити, що Next.js працює на `http://localhost:3000` і preflight до
+11. Перевірте, що Next.js працює на `http://localhost:3000` і preflight до
     `/students` та `/admin/students` проходить (CORS уже налаштований).
-12. Після деплою під контрольованим навантаженням зафіксувати фактичні статуси,
-    заголовки й браузерно-видиму поведінку для `429` і gateway-generated `500`;
-    не припускати наявність CORS-заголовків.
-13. Рендерити `fullName` і `group` лише як текст із output encoding; не
-    використовувати raw HTML.
+12. Перед розгортанням frontend на іншому origin перевірте фактичну
+    CORS-конфігурацію і додайте точний HTTPS-origin окремо схваленим
+    розгортанням.
+13. Реалізуйте loading, empty і error states; не показуйте сирі тексти API
+    Gateway і не робіть автоматичний retry неоднозначного `POST`.
+14. Відображайте `fullName` і `group` лише як текст із output encoding; не
+    використовуйте raw HTML.
+15. Не вважайте Cognito Managed Login's default redirect page frontend
+    integration. Контрольована перевірка `429` і gateway-generated `500` ще
+    не виконувалася.

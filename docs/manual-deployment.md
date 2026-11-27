@@ -1,15 +1,29 @@
 # Manual AWS Deployment Runbook and Team Handoff
 
-- **Checkpoint:** P4-07.6 — COMPLETE
-- **Last updated:** 2026-11-25
+- **Checkpoint:** P4-07.7.5b — COMPLETE
+- **Last updated:** 2026-11-27
 - **Repository:** <https://github.com/akio-q/struct-lab-backend>
 - **Branch:** `feat/manual-aws-deployment`
 - **Packaging commit:** `7b7f9317ec7eec9ff0fb9f4cc58d97221086f87c`
-- **Checkpoint base commit:** `0eec989c5704d35528790c611691fb3af5a0f3c6`
-- **Deployment state:** Dev API Gateway and Lambda integration complete; all 11 HTTP smoke scenarios passed. Valid registration and authenticated end-to-end flows remain unverified.
-- **Next action:** P4-07.7 — Backend End-to-End Verification (not started).
+- **P4-07.6 checkpoint base commit:** `0eec989c5704d35528790c611691fb3af5a0f3c6`
+- **Documentation base commit:** `d1d561faa818fb71d527147db8d50c87c8555547`
+- **Deployment state:** Manual AWS deployment complete. Functional live E2E verification is 9/9 PASS. E2E-10 safe cleanup is DEFERRED BY OPERATOR; two synthetic students and one synthetic non-teacher are retained for frontend integration. Frontend integration is PENDING.
+- **Next action:** P4-08 — Final Review, Commit, Pull Request and Merge (separate approval required; not performed here).
 
-> Every AWS mutation requires explicit operator approval. This repository is public: do not store credentials, passwords, access keys, session tokens, JWTs, student data, teacher usernames, email addresses, personal identifiers, or local filesystem paths in it.
+> Every AWS mutation requires explicit operator approval. This repository is public: keep credentials, passwords, tokens, OAuth authorization codes, real student data, user sign-in details, personal identifiers, and local filesystem paths out of it. The student records in section 10 are synthetic fixtures.
+
+> **This checkpoint is documentation-only.** No AWS API or CLI request, deployed HTTP request, Cognito authentication, student deletion, Cognito deletion, or infrastructure change was performed during P4-07.7.5b.
+
+### Evidence classification
+
+| Class | Meaning in this document |
+| --- | --- |
+| **Deployment record** | Resource settings, package hashes and route bindings recorded during P4-07.4–P4-07.6 (sections 5–8). |
+| **Live verified** | Accepted results from registration, persistence, Cognito sign-in and requests to the deployed API (section 9). |
+| **Manually observed** | The operator inspected the retained records in the AWS Console (section 10). This was not a new, independent DynamoDB API check. |
+| **Locally tested** | Verified by repository tests, local packaging, or offline tooling. No AWS call is implied. |
+| **CDK reference only** | Defined in `lib/` or `test/` but not deployed. Do not treat it as live state. |
+| **Deferred / unverified** | Not executed or not independently confirmed. See section 11. |
 
 ## 1. Deployment approach
 
@@ -22,6 +36,8 @@ The P4-07 phase required real AWS resources without using CloudFormation, CDK de
 - no `cdk bootstrap`, `cdk deploy`, or CloudFormation stack state is introduced in this phase;
 - failures can be stopped and reported without an automatic stack rollback or broad permission change.
 
+AWS Free Plan restrictions on CloudFormation stack creation led to the manual deployment. The team reused the existing HTTP API and Cognito configuration, created the backend table, roles and functions, and connected the routes. No CloudFormation stack owns these resources.
+
 The existing CDK code remains the reference design. It was not modified and is not the deployed state:
 
 - `lib/struct-lab-stack.ts` — intended Lambda, API Gateway, Cognito, DynamoDB, logging, and alarm configuration;
@@ -29,11 +45,11 @@ The existing CDK code remains the reference design. It was not modified and is n
 - `bin/app.ts` — stack wiring and environment validation;
 - `test/` — infrastructure and runtime regression coverage.
 
-No `cdk bootstrap`, `cdk diff`, `cdk deploy`, or `cdk destroy` has been run for this deployment.
+No `cdk bootstrap`, `cdk diff`, `cdk deploy`, or `cdk destroy` was run for the manual deployment. The [frontend integration guide](frontend-integration.md) uses the deployed URL and Cognito IDs directly.
 
 ### Approval model
 
-- Read-only checks may be run to establish state.
+- The operational commands below are for separately authorized work. P4-07.7.5b uses only existing evidence, including for read-only checks.
 - All create, update, and delete operations require explicit operator approval.
 - Do not silently switch AWS profiles or regions.
 - Do not broaden permissions or delete partially created resources to recover from a failure. Stop and report the partial state.
@@ -47,12 +63,15 @@ No `cdk bootstrap`, `cdk diff`, `cdk deploy`, or `cdk destroy` has been run for 
 | Packaging commit | `7b7f9317ec7eec9ff0fb9f4cc58d97221086f87c` — `feat(deployment): add local Lambda packaging and verification` |
 | Health hotfix and regression assertion | `66d7a4cb453bdacc68e93c0a81c88cb72dade2ae` |
 | Lambda deployment commit | None — P4-07.5 changed AWS resources only; no repository change |
-| Last full regression | 247/247 PASS across 12 files, including 28 infrastructure tests, rerun for P4-07.6 |
+| Last full regression | 247/247 PASS across 12 files, including 28 infrastructure tests — historical accepted result from P4-07.6; not rerun for P4-07.7.5b |
+| Final functional live E2E | E2E-01–E2E-09 PASS; E2E-10 DEFERRED BY OPERATOR (P4-07.7) |
 | Package manager | `pnpm@11.14.0` |
 | Required Node.js | `>=22` |
 | Local Node.js used for checkpoint packaging | `v24.13.1` |
 
-The checkpoint commit for this document is created separately and pushed to the existing remote feature branch without force.
+This checkpoint does not create or push a commit. A separate, explicitly approved
+P4-08 review may commit this document and push it to the existing remote feature
+branch without force.
 
 Generated Lambda ZIP archives are ignored by Git:
 
@@ -103,17 +122,19 @@ Use this command for the existing profile; do not substitute a different login m
 | Item | Last verified state |
 | --- | --- |
 | AWS plan | `FREE` |
-| Plan status | `ACTIVE` (P4-07.6 read-only audit; no AWS calls during the Git checkpoint) |
-| Remaining credits | `$159.999971` (last reported; unchanged through P4-07.5) |
+| Plan status | `ACTIVE` — last audited during P4-07.6; not re-verified in P4-07.7.5b |
+| Remaining credits | `$159.999971` — last reported during P4-07.5; current balance not verified |
 | Plan expiration | `2027-05-12` |
 | Budget | `StructLab-Zero-Spend` |
 | Budget amount | `$1.00` monthly |
-| Amount used at verification | `$0.00` |
-| Budget health | `Healthy` |
+| Amount used at verification | `$0.00` — historical observation; not current billing |
+| Budget health | `Healthy` — historical observation |
 | Budget alert threshold | Actual cost > `$0.01` |
 | Budget alert recipient email | Verified (address not stored) |
 | Credits in budget calculation | Unverified |
 | Account-specific DynamoDB Free Tier usage | Unverified |
+
+No billing, Free Plan, credits, or budget audit was performed during P4-07.7.5b. The values above are historical observations. Do not infer zero cost or unchanged credits from this table.
 
 Free Plan credits and allowances are finite. CloudWatch Logs, alarms, requests, and other usage can consume credits after free allowances.
 
@@ -132,13 +153,17 @@ Free Plan credits and allowances are finite. CloudWatch Logs, alarms, requests, 
 | P4-07.4d — IAM Execution Roles | Completed with documented limitations |
 | P4-07.4 — Checkpoint & Team Handoff | Completed |
 | P4-07.5 — Lambda Deployment | Completed — three functions deployed and smoke-tested |
-| P4-07.6 — API Gateway Configuration | **COMPLETE** — configuration audit and HTTP smoke tests passed |
-| P4-07.7 — Backend End-to-End Verification | **NEXT** — not started |
-| Cognito JWT and real teacher authorization verification | Pending |
-| Valid student registration and DynamoDB persistence verification | Pending |
-| Teacher-authorized listing and pagination verification | Pending |
+| P4-07.6 — API Gateway Configuration | Completed — configuration audit and HTTP smoke tests passed |
+| P4-07.7 — Backend End-to-End Verification | **COMPLETE** — 9/9 functional live scenarios PASS |
+| P4-07.7.5a — Safe Cleanup | **DEFERRED BY OPERATOR** — Console reconciliation recorded; no deletion |
+| P4-07.7.5b — Final Deployment Documentation | **COMPLETE** — this document |
+| P4-08 — Final Review, Commit, Pull Request and Merge | **NEXT** — separate approval required |
+| Cognito JWT and real teacher authorization verification | Completed — E2E-03, E2E-04, E2E-05 |
+| Valid student registration and DynamoDB persistence verification | Completed — E2E-01, E2E-02 |
+| Teacher-authorized listing and pagination verification | Completed — E2E-07, E2E-08 |
+| Input validation verification | Completed — E2E-09, 18/18 cases |
 | Frontend integration verification | Pending |
-| Test-resource cleanup | Pending; separate approval required |
+| Test-resource cleanup | Deferred by operator; retained synthetic resources remain |
 
 ## 5. Resources already created or configured
 
@@ -161,9 +186,9 @@ The target table was created during P4-07.4b through the AWS CLI, not by the CDK
 | Streams | Disabled |
 | Replicas | None |
 | Auto Scaling | Not configured |
-| Items at last verification | `0` |
+| Items at last manual verification | `2` synthetic records (P4-07.7.5a Console scan; retained for frontend integration) |
 
-No DynamoDB data operation was performed during the IAM, documentation, or Lambda deployment stages.
+No DynamoDB data operation was performed during the IAM, documentation, or Lambda deployment stages. After registration validation, the operator performed a manual Console reconciliation that observed 2 items and 2 scanned items, with no additional result pages observed; both records matched the registration manifest. No item was edited or deleted. See section 10.
 
 ### 5.2 Cognito
 
@@ -171,14 +196,15 @@ No DynamoDB data operation was performed during the IAM, documentation, or Lambd
 | --- | --- |
 | User Pool ID | `eu-north-1_5v0nXILuU` |
 | User Pool name | `User pool - nobwzm` |
-| Username attributes | Live `UsernameAttributes=[email]` differs from earlier sign-in documentation. Reconcile before P4-07.7 authentication and P4-07.8 frontend verification; Cognito was not changed. |
+| Username attributes | `email` (live `UsernameAttributes=[email]`) |
+| Sign-in identifier | `email`; teachers sign in with their email address |
 | Feature plan | `ESSENTIALS` |
 | Deletion protection | `ACTIVE` |
 | Self-registration | Disabled (`AllowAdminCreateUserOnly=true`) |
 | MFA | `OFF` |
 | Account recovery | `verified_email`, `verified_phone_number` |
 | Cognito domain | `eu-north-15v0nxiluu` |
-| Estimated users | `1` |
+| User inventory | Earlier inventory estimated `1` user. Later E2E used the existing teacher and one synthetic non-teacher; the pool was not recounted. |
 | App Client ID | `5abaa8u50uj7c4eii44goh2t2a` |
 | App Client name | `structlab-dev-client` |
 | Client secret | None |
@@ -195,19 +221,22 @@ No DynamoDB data operation was performed during the IAM, documentation, or Lambd
 | OAuth enabled on client | Yes |
 | Callback URL | `https://d84l1y8p4kdic.cloudfront.net` |
 | Logout URLs | Not set |
-| Default redirect URI | Not set |
+| Explicit `DefaultRedirectURI` setting | Not set; the allowed callback above leads to the default Managed Login landing page |
 | Supported identity providers | `COGNITO` |
-| `teachers` group | Exists; exactly 1 confirmed test teacher; no IAM role |
-| `structlab-test-teachers` group | Exists; same member; no IAM role |
+| `teachers` group | Exact case-sensitive name, no IAM role. The deployment audit found one confirmed test teacher. |
+| `structlab-test-teachers` group | The same audit found the same member and no IAM role. This group does not grant StructLab teacher access. |
 
-The test teacher username is intentionally withheld. Group membership alone does not prove end-to-end teacher authorization.
+The teacher identity is intentionally withheld. E2E-04 verified a live teacher access token, E2E-05 rejected a teacher ID token, and E2E-06 rejected a valid non-teacher access token. Group membership alone is not treated as proof of end-to-end authorization.
+
+Cognito state was not re-audited during P4-07.7.5b. The values above are from earlier deployment verification and the live E2E runs. The live pool has a Cognito domain and OAuth code flow with callback `https://d84l1y8p4kdic.cloudfront.net`; that callback is Cognito Managed Login's existing default redirect page, not the StructLab frontend. A successful Managed Login screenshot proves Cognito authentication only; it does not prove frontend integration.
 
 #### Cognito security mismatches left unchanged
 
-These differences from the CDK reference were observed and intentionally preserved during P4-07.4c. They require separate approval before any change.
+The manual deployment retained these settings. Changes require separate approval; the frontend should use the deployed values.
 
 | Setting | CDK reference | Live configuration |
 | --- | --- | --- |
+| Sign-in identifier | Username; no email sign-in attribute configured | Email (`UsernameAttributes=[email]`) |
 | Minimum password length | 12 | 8 |
 | Password history | 5 | Not configured |
 | Temporary password validity | 3 days | 7 days |
@@ -320,7 +349,7 @@ Policy simulations were performed during P4-07.4d. P4-07.5 then invoked four smo
 | CloudWatch log group `/aws/lambda/structlab-test` | Pre-existing; no retention configured | Leave in place until cleanup approval |
 | One unverified IAM user (name withheld) | Reported as unverified; ownership and use are not established | Do not modify, attach policies to, or delete until verified |
 
-No test resource was modified during the IAM, documentation, or Lambda deployment stages.
+No test resource was modified during the IAM, documentation, or Lambda deployment stages. The retained synthetic students and non-teacher are described in section 10.
 
 ## 7. Deployed Lambda functions and HTTP API
 
@@ -395,11 +424,11 @@ Notes:
 - No DynamoDB reads or writes were observed: the table showed zero consumed read and write capacity during the test window, and its item count remained `0`.
 - No CloudWatch log group was created and no invocation log was returned; the execution roles have no CloudWatch Logs permissions.
 - All existing test resources listed in section 6 remained unchanged.
-- The AWS Free Plan remained `ACTIVE` with credits `$159.999971`.
+- At the time of P4-07.5, the AWS Free Plan was reported `ACTIVE` with credits `$159.999971`; this is historical and was not re-audited.
 
 ### 7.3 API Gateway — COMPLETE
 
-Reused HTTP API `tstq9li2el` at `https://tstq9li2el.execute-api.eu-north-1.amazonaws.com`. The `$default` stage has `AutoDeploy=true`; automatic deployment `4mpp9h` reached `DEPLOYED`. Default throttling is 10 requests/second, burst 20, with no route overrides. API-wide CORS permits only `http://localhost:3000`, methods `GET, POST`, headers `content-type, authorization`, credentials disabled, max age 300 seconds. Both settings also apply to the test route.
+Reused HTTP API `tstq9li2el` at `https://tstq9li2el.execute-api.eu-north-1.amazonaws.com`. The `$default` stage has `AutoDeploy=true`; automatic deployment `4mpp9h` reached `DEPLOYED`. Default throttling is 10 requests/second, burst 20, with no route overrides. API-wide CORS permits only `http://localhost:3000`, methods `GET, POST`, headers `content-type, authorization`, credentials disabled, max age 300 seconds. Both settings also apply to the test route. Final live E2E verification (section 9) used this API; all nine functional scenarios passed.
 
 | Route | Route ID | Authorization | Integration ID | Lambda |
 | --- | --- | --- | --- | --- |
@@ -434,6 +463,8 @@ After the hotfix, **11/11 HTTP scenarios passed in 12 requests**, all with curl 
 | S10: invalid JWT | `401 Unauthorized` |
 | S11: disallowed-origin preflight | `204`, no allow-origin header |
 
+These 11/11 results are the historical P4-07.6 smoke baseline. They are superseded by section 9 for functional coverage.
+
 ### 7.5 API rollback — separate approval required
 
 Retain the rollback snapshots. Before acting, verify the account, region, API, IDs, current targets and policy statements against section 7.3; stop on drift or failure.
@@ -460,7 +491,7 @@ dist/lambda/create-student.zip
 dist/lambda/list-students.zip
 ```
 
-These are rebuilds, not deployment records. ZIP timestamps can change hashes. At this checkpoint `typecheck`, `lint`, `test`, `build`, `package:lambdas`, `verify:lambdas` and `git diff --check` passed. The verifier checked all three ZIPs and handler exports, its network guard, and four offline smoke tests. No rebuild was uploaded. The original health release ZIP was retained outside the repository and its SHA-256 matched section 7.1 before and after packaging.
+These are rebuilds, not deployment records. ZIP timestamps can change hashes. At the P4-07.6 checkpoint, `typecheck`, `lint`, `test`, `build`, `package:lambdas`, `verify:lambdas` and `git diff --check` passed. The verifier checked all three ZIPs and handler exports, its network guard, and four offline smoke tests. No rebuild was uploaded. The original health release ZIP was retained outside the repository and its SHA-256 matched section 7.1 before and after packaging.
 
 Each archive contains exactly one non-empty root entry, `index.js`. The packaging scripts refuse unexpected output paths and verify the archive shape.
 
@@ -472,28 +503,228 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-lambda-packag
 
 Known packaging limitation: the checkpoint verifier used Node.js `v24.13.1`; no local Node.js 22 binary was found. Bundles target `node22`. For deployed runtime evidence see sections 7.2 and 7.4.
 
-## 9. Remaining verification
+## 9. Final live end-to-end verification — COMPLETE
 
-### Backend
+P4-07.7 exercised the deployed API and real Cognito authentication. The preserved registration manifest records HTTP `201` and verified persistence for both student IDs. Section 10 records the later Console reconciliation. Neither an HTTP status nor a matching error body identifies the component that produced it.
 
-- Lambda functions are deployed and attached to the matching execution roles (section 7.1).
-- Still unverified through the API: valid registration (`201`), DynamoDB persistence, oversized-body rejection (`413`), real Cognito authentication, teacher-authorized listing, ID-token rejection, valid non-teacher access-token rejection, and pagination.
-- Runtime throttling behavior has not been load-tested; a controlled dev-only test requires separate approval.
-- Do not use ID tokens for `/admin/students`; the handler requires an access token with the exact `teachers` group.
+### 9.1 Scenario results
 
-### Frontend
+| Scenario | Accepted result |
+| --- | --- |
+| E2E-01 — Student registration | **PASS** |
+| E2E-02 — DynamoDB persistence | **PASS** |
+| E2E-03 — Real Cognito authentication | **PASS** |
+| E2E-04 — Teacher access-token authorization | **PASS** |
+| E2E-05 — Teacher ID-token rejection | **PASS** |
+| E2E-06 — Non-teacher access-token rejection | **PASS** |
+| E2E-07 — Student listing | **PASS** |
+| E2E-08 — Pagination | **PASS** |
+| E2E-09 — Input validation | **PASS** |
+| E2E-10 — Safe cleanup | **DEFERRED BY OPERATOR** |
 
-A local frontend repository was inspected read-only and contains no Cognito SDK, Amplify, SRP, Hosted UI, OAuth authorization-code, access-token, or ID-token implementation. Frontend Cognito compatibility is **NOT VERIFIED**.
+Final classification:
 
-Do not clone, modify, or deploy the frontend. OAuth, the Cognito domain, callback URLs, and the extra auth flow remain preserved until actual frontend compatibility is established.
+- Functional live E2E scenarios: **9/9 PASS**.
+- Original E2E checklist: **9 PASS, 1 DEFERRED**.
+- Cleanup is **not PASS** and was **not executed**.
 
-### Authentication
+### 9.2 Accepted verification totals
 
-No password-based SRP login was performed. No password, JWT, or fresh access-token claim was requested or verified. P4-07.5 exercised only synthetic non-teacher claims; real Cognito access tokens and teacher authorization remain **unverified**. Group membership alone does not prove end-to-end teacher authorization.
+| Verification | Accepted result | Classification |
+| --- | ---: | --- |
+| Backend tests | **247/247 PASS** | Historical accepted baseline across 12 files; not rerun for P4-07.7.5b |
+| Infrastructure tests | **28/28 PASS** | Included in the 247 backend total; not a separate total |
+| Offline package smoke tests | **4/4 PASS** | Historical local packaging verification |
+| Initial live HTTP smoke tests | **11/11 PASS** | Historical P4-07.6 baseline, 12 requests |
+| Combined Python offline E2E tests | **156/156 PASS** | Historical offline baseline |
+| Focused registration and validation tests | **53/53 PASS** | Subset of the backend total |
+| Protected query validation | **8/8 PASS** | Live `GET /admin/students` with teacher authorization |
+| Registration input validation | **10/10 PASS** | Live `POST /students`; all ten invalid requests rejected |
+| Combined validation cases | **18/18 PASS** | 8 protected query + 10 registration; not added to other totals |
+| Functional live E2E scenarios | **9/9 PASS** | P4-07.7 |
 
-## 10. Cleanup candidates and unresolved decisions
+All results above were accepted before P4-07.7.5b; none of these tests was rerun here. The infrastructure and focused suites overlap the backend total. The 18 validation cases comprise the 8 query and 10 registration cases, so there is no grand total.
 
-### Cleanup candidates — separate approval required
+### 9.3 Authorization behavior
+
+| Request to `GET /admin/students` | Observed HTTP status |
+| --- | ---: |
+| Protected request without a token | **401** |
+| Teacher access token | **200** |
+| Teacher ID token | **401** |
+| Valid non-teacher access token | **403** |
+
+Actual E2E-06 output:
+
+```text
+RESULT PASS
+E2E-06 PASS
+HTTP_STATUS 403
+LAYER HANDLER_COMPATIBLE
+AUTH_ATTEMPTS 1
+HTTP_GETS 1
+DETAIL none
+```
+
+`LAYER HANDLER_COMPATIBLE` means the observed response matches the handler contract. It is not independent proof of the execution layer.
+
+The E2E helper decodes JWT claims locally to prepare and inspect test requests. Local claim decoding is **not** independent cryptographic signature verification. API Gateway's JWT authorizer is the signature, issuer, and audience enforcement point; the Lambda teacher guard additionally requires `token_use === "access"` and the exact case-sensitive group `teachers`.
+
+### 9.4 Registration contract and live validation
+
+`POST /students` is public. It creates a DynamoDB record, not a Cognito account. The [handler](../src/handlers/create-student.ts), [HTTP helpers](../src/lib/http.ts) and [validator](../src/students/validation.ts) define this contract.
+
+| Rule | Actual behavior |
+| --- | --- |
+| Content-Type | `application/json`; optional parameters such as `charset` are accepted; media type and header name are case-insensitive |
+| Maximum body size | **4096** decoded UTF-8 bytes |
+| Body presence | Required; blank body is rejected |
+| JSON shape | Must parse as a JSON object |
+| `fullName` | String; trimmed; 1–200 characters |
+| `group` | String; trimmed; 1–50 characters |
+| Unknown fields | Ignored, but counted toward the 4096-byte body limit |
+| Successful registration | **201** with `studentId` (server-generated UUID v4), trimmed `fullName` and `group`, and `createdAt` (server-generated ISO 8601 timestamp) |
+| Invalid input | **400** |
+| Oversized body | **413** |
+| Unsupported media type | **415** |
+
+The handler checks media type first, then decoded bytes, then JSON and fields. Field lengths use JavaScript string length (UTF-16 code units) after `trim()`. Only valid input reaches `PutItem`; the handler returns `201` after the write succeeds. A repository failure returns `500` with `Internal server error`.
+
+Handler error responses use:
+
+```json
+{"error":"<message>"}
+```
+
+with `content-type: application/json` and `cache-control: no-store`.
+
+Exact messages:
+
+| Status | Message |
+| ---: | --- |
+| 415 | `Content-Type must be application/json` |
+| 413 | `Request body must be at most 4096 bytes` |
+| 400 | `Request body is required` |
+| 400 | `Request body must be valid JSON` |
+| 400 | `Request body must be a JSON object` |
+| 400 | `fullName must be a non-empty string` |
+| 400 | `fullName must be at most 200 characters` |
+| 400 | `group must be a non-empty string` |
+| 400 | `group must be at most 50 characters` |
+
+Live validation results:
+
+- Eight HTTP **400** cases: PASS.
+- One HTTP **415** case: PASS.
+- One HTTP **413** case: PASS.
+- Exact error bodies: PASS.
+- Total POST attempts: **10**.
+- Unexpected results: **0**.
+- Ambiguous results: **0**.
+- Successful registration responses: **0**.
+
+Registration is **not idempotent**. The frontend must not blindly retry an ambiguous registration request after a timeout, `429`, `500`, or network failure; a retry can create a duplicate record.
+
+### 9.5 Listing contract
+
+Send `Authorization: Bearer <access-token>` to `GET /admin/students`. The [teacher guard](../src/lib/auth.ts) requires an access token with the exact case-sensitive group `teachers` before the [listing handler](../src/handlers/list-students.ts) validates query parameters or calls DynamoDB.
+
+- Response shape: `{ "items": Student[], "nextCursor": string | null }`.
+- Each item contains exactly `studentId`, `fullName`, `group`, and `createdAt`.
+- Default `limit`: **20**.
+- Maximum `limit`: **100**.
+- `limit` must be a decimal integer from 1 to 100; otherwise **400** with `limit must be an integer between 1 and 100`.
+- Empty `cursor`: **400** with `cursor must not be empty`.
+- Invalid or oversized `cursor`: **400** with `cursor is invalid`.
+- Maximum cursor length: **512** characters.
+- [Cursor format](../src/students/cursor.ts): unpadded base64url-encoded JSON object containing only `studentId`, whose value must be a UUID v4. The cursor is opaque to clients: pass it back unchanged as `cursor`.
+- Backend uses DynamoDB `Scan`; no stable sort order is promised.
+- `nextCursor: null` means there are no more pages.
+- Pagination may produce an empty terminal page; continue while `nextCursor` is non-null.
+
+E2E-07 (listing) and E2E-08 (pagination) passed.
+
+## 10. Deferred cleanup and retained test data
+
+### 10.1 Operator decision
+
+E2E-10 safe cleanup is **DEFERRED BY OPERATOR**. This is an explicit operator decision, not a technical blocker. No deletion was executed. Deletion permissions and deletion behavior remain unverified.
+
+### 10.2 Manual Console reconciliation
+
+After registration validation, the operator performed a manual AWS Console reconciliation. This was a manual observation, not an independent DynamoDB API check.
+
+| Observation | Result |
+| --- | --- |
+| Table | `StructLabStudents-dev` |
+| Items returned | **2** |
+| Items scanned | **2** |
+| Additional result pages | None observed |
+| RCUs consumed | **0.5** |
+| Record inspection | Both records were individually opened; all four attributes matched the registration manifest |
+| Unexpected records | None observed |
+| Records edited or deleted | None |
+
+The Console displayed the scan time as **November 27, 2026, 01:30:49**. No timezone or read-consistency setting is established by the screenshot; do not infer one.
+
+### 10.3 Retained synthetic students
+
+Both records are intentionally retained for upcoming frontend integration. Their values are recorded in the preserved `registration-manifest-SL_E2E_20261125_56bd0fa0e60a.json`.
+
+| Field | Student 01 | Student 02 |
+| --- | --- | --- |
+| `studentId` | `ca461ea9-497a-40ee-aa66-d00fb7d8785b` | `48dc69fa-1b24-4544-b1a1-4d267e1dd44e` |
+| `fullName` | `SL_E2E_20261125_56bd0fa0e60a_01` | `SL_E2E_20261125_56bd0fa0e60a_02` |
+| `group` | `SL_E2E_20261125_56bd0fa0e60a` | `SL_E2E_20261125_56bd0fa0e60a` |
+| `createdAt` | `2026-11-26T18:44:35.766Z` | `2026-11-26T18:44:47.566Z` |
+
+### 10.4 Retained synthetic non-teacher
+
+The operator retained one synthetic non-teacher for potential frontend authorization verification. Its exact sign-in email, canonical Cognito username and `sub` are recorded in the private `nonteacher-manifest-SL_E2E_20261125_56bd0fa0e60a.json`.
+
+| Property | Previously observed value |
+| --- | --- |
+| Status | Enabled; `CONFIRMED` |
+| Email verified | Administratively verified |
+| Group memberships | None |
+| Managed Login | Successful |
+| Live E2E-06 rejection | **PASS** — `403` |
+
+The existing teacher was not modified. No deletion was executed. Retention is based on the earlier verification and the decision not to delete; Cognito state was not independently reverified during cleanup or this documentation checkpoint.
+
+### 10.5 Future cleanup instructions
+
+Future cleanup requires separate explicit approval and must remove only explicitly approved synthetic resources.
+
+1. Verify the AWS account, region, table, and resource identifiers before acting.
+2. Match the approved student IDs to the registration manifest. For any approved Cognito removal, match the pool, canonical username, `sub` and email to the non-teacher manifest. Stop on a mismatch.
+3. Preserve the existing teacher identity and the `teachers` group membership.
+4. Export or back up any data that must be retained before a destructive operation.
+5. Delete only the approved items or users. Do not delete the table, the User Pool, the App Client, or the `teachers` group as part of routine test-data cleanup.
+6. Do not use a broad scan-and-delete procedure; deletion protection on the table and User Pool is a separate safeguard and is not a substitute for item-level approval.
+7. Recheck the remaining resources and record the result without storing passwords, tokens, or other secrets.
+8. Treat deletion permissions and behavior as unverified until an approved cleanup actually exercises them.
+
+## 11. Remaining limitations, cleanup candidates and unresolved decisions
+
+### 11.1 Limitations
+
+- Safe cleanup (E2E-10) is deferred; deletion permissions and behavior remain unverified.
+- Frontend integration is pending. The earlier read-only inspection found no Cognito SDK, Amplify, SRP, Hosted UI, OAuth authorization-code, access-token, or ID-token implementation in the local frontend repository. Re-verify before integration.
+- Cognito Managed Login's existing default redirect page is not the StructLab frontend. A successful Managed Login screenshot proves Cognito authentication only.
+- Runtime throttling (`429`) and Lambda-throttling `500` behavior were not load-tested; a controlled dev-only test requires separate approval.
+- CORS headers on gateway-generated `401`, `403`, `429`, and `500` responses were not independently verified.
+- The manually deployed Lambda execution roles have no CloudWatch Logs permissions; function logs are unavailable. The three log groups and four alarms in the CDK design were not deployed.
+- The manual DynamoDB table uses provisioned capacity (`10` RCU / `10` WCU), while the CDK reference uses on-demand throughput (`25`/`25`).
+- The manual Cognito configuration differs from the CDK reference in password policy, password history, temporary password validity, account recovery, OAuth/domain, and the extra `ALLOW_USER_AUTH` flow.
+- The manual IAM roles use `ManagedBy=Manual`; CDK-tagged resources would use `ManagedBy=AWS CDK`.
+- PITR, AWS Backup, DynamoDB TTL, and automated retention are not configured. The retention policy remains manual.
+- Dev is not approved for real personal data; use synthetic data only. Any new live registration or data operation requires separate approval.
+- Public registration can be abused by non-browser clients. CORS is not authorization, and best-effort throttling is not a spending cap.
+- The AWS Free Plan was last audited as `ACTIVE`; current billing, credits, and Free Plan status were not re-verified. Do not claim zero cost or unchanged credits.
+- `docs/deployment.md`, `docs/phase-2-plan.md`, and `docs/phase-3-plan.md` still describe the pre-deployment state. They were outside the approved edit set for P4-07.7.5b and need a separate documentation update.
+
+### 11.2 Cleanup candidates — separate approval required
 
 | Candidate | Reason | Preconditions |
 | --- | --- | --- |
@@ -503,23 +734,8 @@ No password-based SRP login was performed. No password, JWT, or fresh access-tok
 | DynamoDB table `Students` | Legacy/test table with 0 items | Export/backup and explicit approval; deletion protection must be disabled separately |
 | Cognito group `structlab-test-teachers` | Temporary group | Remove only after `teachers` membership is confirmed and no dependency remains |
 | CloudWatch log group `/aws/lambda/structlab-test` | Test Lambda log group | Retain until its logs are no longer needed |
+| Two synthetic students and one synthetic non-teacher | Retained for frontend integration | Follow the [dev retention policy](../README.md#retention-policy) and the manifest-scoped approval procedure in section 10.5 |
 
-### Known limitations and unresolved decisions
+## 12. Exact next action
 
-- Public registration can be abused by non-browser clients. CORS is not authorization, and best-effort throttling is not a spending cap. Use **synthetic data only** in dev; any valid registration or data operation requires separate approval.
-- The IAM roles deliberately have no CloudWatch Logs permissions; function logs are unavailable until a later approved logging change.
-- No CloudWatch log groups or alarms exist for the deployed functions.
-- Valid student registration and DynamoDB persistence are unverified.
-- Teacher-authorized listing and pagination are unverified.
-- Actual SRP login and fresh Cognito access-token claims are unverified; only synthetic non-teacher claims were exercised.
-- Frontend Cognito compatibility is unverified.
-- The live DynamoDB table was created manually and is not the CDK-managed table. Its name and provisioned capacity (`10` RCU / `10` WCU) differ from the CDK on-demand reference.
-- Cognito password policy, password history, temporary password validity, account recovery, OAuth/domain, and extra auth flow differ from the CDK reference.
-- The manual IAM roles use `ManagedBy=Manual`; CDK-tagged resources would use `ManagedBy=AWS CDK`.
-- The `StructLab-Zero-Spend` budget is healthy, but whether credits are included in its calculation is unverified.
-- Account-specific DynamoDB Free Tier usage remains unverified.
-- The dev API is exposed; the smoke tests do not establish production readiness or end-to-end coverage.
-
-## 11. Exact next action
-
-**P4-07.7 — Backend End-to-End Verification: NEXT, not started.** Obtain separate approval for the verification scope in section 9 before exercising login, authorized routes, or persistence. Preserve the release ZIP and rollback snapshots.
+**P4-08 — Final Review, Commit, Pull Request and Merge.** Wait for separate approval. Preserve the release ZIP, rollback snapshots, manifests and retained synthetic test data. Safe cleanup remains deferred.
