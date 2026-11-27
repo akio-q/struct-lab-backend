@@ -13,6 +13,7 @@ export const handler = async (): Promise<APIGatewayProxyStructuredResultV2> => {
     statusCode: 200,
     headers: {
       'content-type': 'application/json',
+      'cache-control': 'no-store',
     },
     body: JSON.stringify({
       status: 'ok',

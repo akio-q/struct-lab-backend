@@ -14,6 +14,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "package:lambdas": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-lambdas.ps1",
+    "verify:lambdas": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-lambda-packages.ps1",
     "synth": "cdk synth",
     "cdk": "cdk"
   },
